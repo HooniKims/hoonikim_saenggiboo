@@ -1,66 +1,124 @@
-import Image from "next/image";
-import styles from "./page.module.css";
+import Link from "next/link";
+import { BookOpen, Users, UserCheck, FileText, Download, Youtube, ArrowRight } from "lucide-react";
 
 export default function Home() {
   return (
-    <div className={styles.page}>
-      <main className={styles.main}>
-        <Image
-          className={styles.logo}
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className={styles.intro}>
-          <h1>To get started, edit the page.js file.</h1>
+    <div className="container">
+      {/* Hero Section */}
+      <section className="hero-section">
+        <h1 className="hero-title">
+          생기부 작성 도우미
+          <span className="brand-by" style={{ position: 'absolute', top: '-17px', right: '-80px', transform: 'rotate(25deg)', fontSize: '1.2rem', whiteSpace: 'nowrap', zIndex: 1 }}>by HooniKim</span> {/* 뱃지 위치 수정: top, right 값 조절 */}
+        </h1>
+        <p className="hero-subtitle">
+          선생님의 업무 시간을 단축시키기 위한 <span className="highlight">AI 기반 보조 도구</span>입니다.
+        </p>
+      </section>
+
+      {/* Privacy Notice */}
+      <div className="privacy-notice">
+        <div className="privacy-icon">
+          <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" /></svg>
+        </div>
+        <div className="privacy-content">
+          <h3>개인정보처리방침 안내</h3>
           <p>
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              Learning
-            </a>{" "}
-            center.
+            이 앱은 어떠한 데이터도 외부 서버로 수집/전송하지 않습니다.
+            학생들의 소중한 개인정보를 보호하기 위해 모든 정보는 사용자의 브라우저(로컬 스토리지)에만 저장됩니다.
+            안심하고 사용하세요.
           </p>
         </div>
-        <div className={styles.ctas}>
-          <a
-            className={styles.primary}
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className={styles.logo}
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className={styles.secondary}
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
+      </div>
+
+      {/* Main Menu Grid (2x2) */}
+      <section className="menu-grid">
+        {/* Card 1: Gwasetuk */}
+        <Link href="/gwasetuk" className="menu-card card-blue">
+          <div className="card-icon-wrapper">
+            <BookOpen size={32} />
+          </div>
+          <h2>과세특(자유학기 세특)</h2>
+          <p>특정 과목 시간에 활동한 내용을 바탕으로 과목별(자유학기) 세부능력 및 특기사항을 생성합니다.</p>
+          <div className="card-link">
+            바로가기 <ArrowRight size={16} style={{ marginLeft: '4px' }} />
+          </div>
+        </Link>
+
+        {/* Card 2: Club */}
+        <Link href="/club" className="menu-card card-purple">
+          <div className="card-icon-wrapper">
+            <Users size={32} />
+          </div>
+          <h2>동아리 세특</h2>
+          <p>동아리 활동 시간에 활동한 내용을 바탕으로 동아리 세부 능력 및 특기사항을 생성합니다.</p>
+          <div className="card-link">
+            바로가기 <ArrowRight size={16} style={{ marginLeft: '4px' }} />
+          </div>
+        </Link>
+
+        {/* Card 3: Behavior */}
+        <Link href="/behavior" className="menu-card card-orange">
+          <div className="card-icon-wrapper">
+            <UserCheck size={32} />
+          </div>
+          <h2>행발 작성</h2>
+          <p>학생의 관찰 기록을 바탕으로 행동 특성 및 종합 의견을 생성합니다.</p>
+          <div className="card-link">
+            바로가기 <ArrowRight size={16} style={{ marginLeft: '4px' }} />
+          </div>
+        </Link>
+
+        {/* Card 4: Letter */}
+        <Link href="/letter" className="menu-card card-green">
+          <div className="card-icon-wrapper">
+            <FileText size={32} />
+          </div>
+          <h2>가정통신문 작성</h2>
+          <p>여름방학 또는 겨울방학 전 배부되는 성적표(생활 통지표)의 학교에서 가정으로 보내는 가정통신문을 생성합니다.</p>
+          <div className="card-link">
+            바로가기 <ArrowRight size={16} style={{ marginLeft: '4px' }} />
+          </div>
+        </Link>
+      </section>
+
+      {/* Bottom Section (Vertical Layout) */}
+      <section className="bottom-section" style={{ display: 'flex', flexDirection: 'column', gap: '30px', marginBottom: '60px' }}>
+        {/* Chrome Extension */}
+        <a href="#" className="info-card" style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+            <div className="info-icon">
+              <Download size={24} />
+            </div>
+            <div>
+              <h3 className="info-title">나이스 자동 입력</h3>
+              <p className="info-desc" style={{ marginBottom: 0 }}>
+                생성된 내용을 나이스에 자동으로 입력해주는 크롬 확장 프로그램을 설치하세요.
+              </p>
+            </div>
+          </div>
+          <ArrowRight size={24} className="text-gray-400" />
+        </a>
+
+        {/* YouTube Link */}
+        <div className="info-card">
+          <div className="info-header">
+            <div className="info-icon" style={{ color: '#ef4444', backgroundColor: '#fef2f2' }}>
+              <Youtube size={24} />
+            </div>
+            <h3 className="info-title">사용 가이드 영상</h3>
+          </div>
+          <div className="youtube-container" style={{ position: 'relative', paddingBottom: '56.25%', height: 0, borderRadius: '16px', overflow: 'hidden', boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1)' }}>
+            <iframe
+              style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%' }}
+              src="https://www.youtube.com/embed/aGrG4vg296o"
+              title="YouTube video player"
+              frameBorder="0"
+              allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+              allowFullScreen
+            ></iframe>
+          </div>
         </div>
-      </main>
+      </section>
     </div>
   );
 }
