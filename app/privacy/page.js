@@ -47,7 +47,10 @@ export default function PrivacyPage() {
                     5. 문의
                 </h2>
                 <p style={{ lineHeight: '1.8', color: '#4b5563' }}>
-                    개인정보처리방침에 대한 문의사항은 개발자에게 연락해 주세요.
+                    개인정보처리방침에 대한 문의사항은 아래 이메일로 연락해 주세요.
+                </p>
+                <p style={{ lineHeight: '1.8', color: '#2563eb', fontWeight: 'bold', marginTop: '0.5rem' }}>
+                    📧 <a href="mailto:greenguyhh@gmail.com" style={{ color: '#2563eb' }}>greenguyhh@gmail.com</a>
                 </p>
 
                 <div style={{ marginTop: '2rem', padding: '1rem', backgroundColor: '#f3f4f6', borderRadius: '8px', textAlign: 'center' }}>
