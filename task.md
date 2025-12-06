@@ -100,8 +100,97 @@
     - [x] 엑셀 대량 데이터 처리 테스트 (파싱 로직 검증 완료)
     - [x] AI 생성 품질 최종 확인 (프롬프트 최적화 완료)
 
-# 프로젝트 완료
-모든 개발 단계가 완료되었습니다.
+# 프로젝트 완료 (Web App)
+모든 웹 애플리케이션 개발 단계가 완료되었습니다.
 - 과세특, 동아리 세특, 행발, 가정통신문 작성 기능 구현 완료.
 - UI/UX 통일성 확보 및 반응형 디자인 적용.
 - AI 프롬프트 최적화 및 글자수 제한 로직 강화.
+
+## Phase 9: 크롬 확장 프로그램 개발 (완료)
+- [x] **확장 프로그램 기본 설정**
+    - [x] Manifest V3 설정 (`manifest.json`)
+    - [x] 아이콘 및 기본 리소스 구성 (아이콘 누락 및 리사이징 수정 완료)
+    - [x] **[NEW] 명칭 및 용어 변경 (ACE -> 나이스 자동입력 도우미, 교과평어 -> 과세특, 행동특성 -> 행발)**
+- [x] **UI 구현 (Popup)**
+    - [x] 디자인 시안(이미지) 기반 UI 구현 (HTML/CSS)
+    - [x] **[NEW] UI 디자인 전면 개편 (Web App 스타일 통일, Outfit 폰트, 카드 레이아웃)**
+    - [x] 상태 표시창 (데이터 개수 확인)
+    - [x] 데이터 가져오기 / 자동 입력 버튼 구현
+- [x] **기능 구현: 데이터 가져오기 (From Web App)**
+    - [x] Content Script: 웹 앱 DOM 파싱 및 데이터 추출
+    - [x] Chrome Storage 저장 로직
+- [x] **기능 구현: 자동 입력 (To NEIS)**
+    - [x] Content Script: NEIS 입력 필드 식별 및 값 주입
+    - [x] 자동 입력 순회 로직 (매크로 성격)
+    - [x] **[NEW] 가상 스크롤 및 그리드 대응 (Scroll, ArrowDown, Enter 전략 적용)**
+
+## Phase 10: NEIS 자동 입력 고도화 및 디버깅 (완료 ✅)
+- [x] **이름 기반 매칭 시스템 구현**
+    - [x] 행 순서 대신 학생 이름으로 매칭하는 `processAutoFillByName` 함수 구현
+    - [x] `findStudentRow` 함수: 그리드에서 학생 이름 검색 및 스크롤 지원
+    - [x] 가상 스크롤 대응: DOM에 없는 학생은 스크롤하여 검색
+- [x] **NEIS Floating Textarea 대응**
+    - [x] NEIS가 row 내부가 아닌 floating textarea 사용함을 발견
+    - [x] `aria-label` 속성에서 행 번호 추출 (`N행 마지막 열...` 형식)
+    - [x] `data-rowindex`와 `aria-label` 행 번호 매핑 로직 구현
+    - [x] `findActiveTextareaInDocument` 함수: 전체 document에서 활성 textarea 검색
+- [x] **Textarea 활성화 로직 강화**
+    - [x] 다중 활성화 전략: Direct click, Double-click, Focus+Enter, Focus+F2, Control wrapper click
+    - [x] 스크롤 후 row 재검색 로직 (가상 스크롤로 DOM 변경 대응)
+    - [x] ~~ESC 키 + blur로 강제 닫기~~ → **Tab 키로 변경 (데이터 저장 보장)**
+    - [x] 좌표 기반 MouseEvent 시뮬레이션 (8-cell 행 대응)
+- [x] **셀 탐색 로직 개선 (8 cells 구조 대응)**
+    - [x] Strategy 1: row 내 기존 editable textarea 확인
+    - [x] Strategy 2: `.cl-control.cl-textarea` (non-readonly) 검색
+    - [x] Strategy 3: 모든 셀에서 textarea control 검색
+    - [x] Strategy 4: `aria-label`에서 '세부능력'/'특기사항' 키워드로 셀 탐색
+    - [x] Final fallback: 8 cells → cell 7, 7 cells → cell 5 사용
+- [x] **장기결석 행 이후 8-cell 행 특별 처리**
+    - [x] 8-cell 감지 시 **Tab 네비게이션 전략** 적용 (NEIS 자동 스크롤 활용)
+    - [x] 현재 textarea에서 Tab 키로 다음 행 이동
+    - [x] 정확한 aria-row 매칭 필수 (±2 tolerance 제거)
+    - [x] scrollIntoView fallback 적용
+- [x] **Readonly 셀 대응 (분할된 행 처리)**
+    - [x] 1-cell readonly 행 감지 시 Tab 네비게이션으로 다음 textarea 이동
+    - [x] 마지막 학생(허지훈 등) 정상 입력 완료
+- [x] **테스트 및 검증 완료**
+    - [x] 26/26명 (100%) 입력 성공 확인
+    - [x] 장기결석 행 이후 학생 입력 정상 동작 확인
+
+### 최종 상태 (2025-12-06) ✅
+- **26/26명 (100%) 입력 성공**
+- 모든 문제 해결됨:
+  - 장기결석 행 이후 8-cell 행: Tab 네비게이션으로 NEIS 자동 스크롤 활용
+  - Readonly 분할 행: Tab 키로 다음 입력 가능 셀 이동
+  - 데이터 손실 방지: ESC → Tab 변경으로 저장 보장
+
+# 프로젝트 완료 (Chrome Extension) 🎉
+NEIS 자동 입력 크롬 확장 프로그램 개발이 완료되었습니다.
+- 웹앱에서 생성된 데이터를 NEIS에 자동 입력하는 기능 구현 완료.
+- 가상 스크롤, 8-cell 행, readonly 셀 등 NEIS 특수 구조 완벽 대응.
+- Tab 네비게이션 전략으로 안정적인 자동 입력 구현.
+
+## Phase 11: 글자수 제한 엄격 준수 기능 강화 (완료)
+- [x] **프롬프트 강화 (전체 페이지 적용)**
+    - [x] 글자수 제한 지시문 전면 개편 (최우선 준수 사항으로 강조)
+    - [x] "절대 규칙", "초과시 무효화" 등 강력한 표현 사용
+    - [x] 작성 전/후 글자수 확인 지시 추가
+- [x] **활동 선별 로직 강화 (과세특, 동아리 세특)**
+    - [x] 80자 미만: 활동 1개만 선택
+    - [x] 150자 이하: 최대 2개 선택
+    - [x] 250자 이하: 최대 3개 선택
+    - [x] 350자 이하: 최대 4개 선택
+    - [x] 350자 초과: 모든 활동 사용
+- [x] **후처리 함수 추가 (전체 페이지 적용)**
+    - [x] `truncateToCharLimit()` 함수 구현
+    - [x] AI 응답이 글자수 초과 시 자동으로 자르기
+    - [x] 마지막 완전한 문장(마침표)에서 자르기 (70% 이후)
+    - [x] 불완전한 경우 마침표 자동 추가 (~함. ~임. 등 종결)
+    - [x] 콘솔 로그로 자르기 작업 기록
+
+### 적용 페이지
+- 과세특 (`/gwasetuk`) ✅
+- 동아리 세특 (`/club`) ✅
+- 행발 작성 (`/behavior`) ✅
+- 가정통신문 (`/letter`) ✅
+

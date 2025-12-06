@@ -152,6 +152,38 @@ export default function BehaviorPage() {
         setStudentCount(prev => prev - 1);
     };
 
+    // 글자수 초과시 마지막 완전한 문장까지만 잘라내는 후처리 함수
+    const truncateToCharLimit = (text, maxChars) => {
+        if (!text || text.length <= maxChars) return text;
+
+        // 최대 글자수까지 자르기
+        let truncated = text.substring(0, maxChars);
+
+        // 마지막 완전한 문장(마침표)까지 찾기
+        const lastPeriodIndex = truncated.lastIndexOf('.');
+        const lastCommaIndex = truncated.lastIndexOf(',');
+
+        if (lastPeriodIndex > truncated.length * 0.7) {
+            // 마지막 마침표가 70% 이후에 있으면 그 위치까지 자르기
+            truncated = truncated.substring(0, lastPeriodIndex + 1);
+        } else if (lastCommaIndex > truncated.length * 0.8) {
+            // 마침표가 너무 앞에 있으면 마지막 쉼표까지 자르고 마침표 추가
+            truncated = truncated.substring(0, lastCommaIndex) + '.';
+        } else {
+            // 둘 다 적절하지 않으면 마지막 완전한 단어까지 자르고 마침표 추가
+            const lastSpaceIndex = truncated.lastIndexOf(' ');
+            if (lastSpaceIndex > truncated.length * 0.8) {
+                truncated = truncated.substring(0, lastSpaceIndex);
+            }
+            // '~함', '~임', '~음' 등으로 끝나면 마침표 추가
+            if (!truncated.endsWith('.')) {
+                truncated = truncated.replace(/[,\s]+$/, '') + '.';
+            }
+        }
+
+        return truncated.trim();
+    };
+
     const generatePrompt = (student, targetChars) => {
         let minChar, maxChar;
         if (targetChars === 200) {
@@ -164,11 +196,18 @@ export default function BehaviorPage() {
         }
 
         const lengthInstruction = `
-[글자 수 제한 조건 - 절대 준수]
-가장 중요한 제약 조건입니다.
-1. **공백 포함 전체 글자 수**가 **${maxChar}자**를 절대 넘지 않도록 하세요.
-2. 목표 범위: **${minChar}자 이상 ${maxChar}자 이하**
-3. 만약 내용이 길어질 것 같으면 문장을 간결하게 줄여서라도 위 글자 수 제한을 반드시 맞추세요.
+###### [글자 수 제한 조건 - 최우선 준수 사항] ######
+이것은 가장 중요한 제약 조건입니다. 반드시 지켜야 합니다.
+
+** 절대 규칙: 공백 포함 전체 글자 수가 ${maxChar}자를 절대로! 초과해서는 안 됩니다. **
+
+1. 작성 전 ${maxChar}자 제한을 먼저 인지하고 계획적으로 작성하세요.
+2. 목표 범위: ${minChar}자 이상 ~ ${maxChar}자 이하 (초과 절대 불가)
+3. 작성 후 반드시 글자 수를 세어보고, ${maxChar}자를 초과하면 문장을 줄여서 다시 작성하세요.
+4. 차라리 내용을 줄이더라도 ${maxChar}자 제한을 반드시 준수하세요.
+5. 절대로 ${maxChar}자를 넘기지 마세요. 이 규칙을 어기면 출력이 무효화됩니다.
+
+** 최종 출력은 반드시 ${maxChar}자 이하여야 합니다. **
 `;
         const observationText = student.observation ? `학생 행동 관찰 내용: ${student.observation}` : "학생 행동 관찰 내용: 일반적인 모범 학생의 특성 (구체적인 입력 없음)";
 
@@ -233,7 +272,14 @@ ${lengthInstruction}
 
             if (data.error) throw new Error(data.error);
 
-            updateStudent(student.id, "result", data.result);
+            // 글자수 초과시 후처리: 설정된 글자수 이하로 자르기
+            let result = data.result;
+            if (result && result.length > targetChars) {
+                console.log(`[글자수 초과] 원본: ${result.length}자 → ${targetChars}자로 자르기`);
+                result = truncateToCharLimit(result, targetChars);
+            }
+
+            updateStudent(student.id, "result", result);
             updateStudent(student.id, "status", "success");
         } catch (error) {
             console.error(error);
