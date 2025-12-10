@@ -92,12 +92,14 @@ export default function BehaviorPage() {
                         headerRowIndex = i;
                     }
 
-                    // 행동 관찰 결과 열 인식: 다양한 키워드 지원
+                    // 행동 관찰 결과 열 인식: 다양한 키워드 지원 (세부능력 및 특기사항 포함)
                     // cellValue는 공백이 제거된 상태이므로 공백 없는 키워드로 비교
                     if (cellValue.includes("관찰 결과") || cellValue.includes("행동 관찰") ||
                         cellValue.includes("행발") || cellValue.includes("행동") ||
                         cellValue.includes("관찰") || cellValue.includes("결과") ||
-                        cellValue.includes("특성") || cellValue.includes("종합의견")) {
+                        cellValue.includes("특성") || cellValue.includes("종합의견") ||
+                        cellValue.includes("세부능력") || cellValue.includes("특기사항") ||
+                        cellValue.includes("세특")) {
                         observationColIndex = j;
                     }
                 }
