@@ -14,7 +14,7 @@ export default function GwasetukPage() {
     const [subjectName, setSubjectName] = useState("");
     const [schoolLevel, setSchoolLevel] = useState("middle"); // elementary, middle, high
 
-    const [students, setStudents] = useState([{ id: 1, name: "", grade: "A", result: "", status: "idle" }]);
+    const [students, setStudents] = useState([{ id: 1, name: "", grade: "A", individualActivity: "", result: "", status: "idle" }]);
     const [activities, setActivities] = useState([""]);
     const [textLength, setTextLength] = useState("1500"); // 1500, 1000, 600, manual
     const [manualLength, setManualLength] = useState("");
@@ -44,7 +44,7 @@ export default function GwasetukPage() {
         const newStudents = [...students];
         if (count > newStudents.length) {
             for (let i = newStudents.length + 1; i <= count; i++) {
-                newStudents.push({ id: i, name: "", grade: "A", result: "", status: "idle" });
+                newStudents.push({ id: i, name: "", grade: "A", individualActivity: "", result: "", status: "idle" });
             }
         } else {
             newStudents.splice(count);
@@ -87,32 +87,48 @@ export default function GwasetukPage() {
             const data = XLSX.utils.sheet_to_json(ws, { header: 1 });
 
             let nameColIndex = -1;
+            let activityColIndex = -1;
             let headerRowIndex = -1;
 
-            // 1. Find the header row and "성명" column
+            // 1. Find the header row, "성명" column, and "활동 내용" column
             for (let i = 0; i < data.length; i++) {
                 const row = data[i];
+                // 헤더 행의 모든 열 이름 출력 (디버깅용)
+                if (i === 0) {
+                    console.log("[엑셀 파싱] 헤더 행:", row.map((cell, idx) => `[${idx}]${String(cell).trim()}`).join(" | "));
+                }
                 for (let j = 0; j < row.length; j++) {
                     const cellValue = String(row[j]).trim().replace(/\s/g, ""); // Remove spaces
                     if (cellValue === "성명" || cellValue === "이름") {
                         nameColIndex = j;
                         headerRowIndex = i;
-                        break;
+                    }
+                    // 활동 내용 열 인식: 다양한 키워드 지원
+                    if (cellValue.includes("활동") || cellValue.includes("내용") ||
+                        cellValue.includes("관찰내용") || cellValue.includes("관찰기록")) {
+                        activityColIndex = j;
                     }
                 }
                 if (nameColIndex !== -1) break;
             }
 
+            console.log(`[엑셀 파싱] nameColIndex: ${nameColIndex} activityColIndex: ${activityColIndex} headerRowIndex: ${headerRowIndex}`);
+
             const newStudents = [];
             let idCounter = 1;
 
-            // 2. Extract names if column found
+            // 2. Extract names and activities if columns found
             if (nameColIndex !== -1) {
                 for (let i = headerRowIndex + 1; i < data.length; i++) {
                     const row = data[i];
                     const name = row[nameColIndex];
+                    const activity = activityColIndex !== -1 ? row[activityColIndex] : "";
                     if (name && typeof name === 'string' && name.trim() !== "") {
-                        newStudents.push({ id: idCounter++, name: name.trim(), grade: "A", result: "", status: "idle" });
+                        const individualActivity = activity && typeof activity === 'string' ? activity.trim() : "";
+                        newStudents.push({ id: idCounter++, name: name.trim(), grade: "A", individualActivity, result: "", status: "idle" });
+                        if (individualActivity) {
+                            console.log(`[엑셀 파싱] 학생: ${name.trim()} 활동내용: ${individualActivity}`);
+                        }
                     }
                 }
             } else {
@@ -124,7 +140,7 @@ export default function GwasetukPage() {
                         const val = row[j];
                         if (typeof val === 'string' && val.length > 1 && val.length < 10) {
                             if (val !== "성명" && val !== "이름") {
-                                newStudents.push({ id: idCounter++, name: val.trim(), grade: "A", result: "", status: "idle" });
+                                newStudents.push({ id: idCounter++, name: val.trim(), grade: "A", individualActivity: "", result: "", status: "idle" });
                                 break;
                             }
                         }
@@ -224,7 +240,7 @@ export default function GwasetukPage() {
         return truncated.trim();
     };
 
-    const generatePrompt = (student, selectedActivities, targetChars) => {
+    const generatePrompt = (student, selectedActivities, targetChars, individualActivity = "") => {
         const gradePrompts = {
             A: `// A등급 프롬프트\n등급: A (탁월함)\n이 학생은 학업 역량과 자기주도성이 매우 뛰어난 학생입니다.\n활동의 깊이와 수준이 높으며, 심화된 탐구와 융합적 사고가 잘 드러나도록 작성하세요.`,
             B: `// B등급 프롬프트\n등급: B (우수함)\n이 학생은 주어진 과제를 성실히 수행하고 우수한 학업 역량을 보여주는 학생입니다.\nA등급보다는 최상급 표현(탁월함, 매우 뛰어남 등)을 줄이고, 과제를 잘 완수하고 성실히 참여했다는 점을 중심으로 작성하세요.`,
@@ -282,6 +298,11 @@ export default function GwasetukPage() {
 
         const activitiesText = selectedActivities.map(a => `- ${a}`).join("\n");
 
+        // 학생별 개별 활동 내용이 있으면 추가
+        const individualActivityText = individualActivity.trim()
+            ? `\n\n[이 학생의 개별 활동 내용]\n${individualActivity}\n(위 개별 활동 내용과 공통 활동 내용을 연결하여 통합적으로 서술해 주세요. 예: '독서 감상문 작성' 활동과 '운수 좋은 날'이라는 개별 활동이 있으면, '운수 좋은 날'을 읽고 독서 감상문을 작성한 것으로 연결하여 서술)`
+            : "";
+
         return `
 당신은 이제 최고 수준의 교육학 전문관 및 진로 교사입니다.
 학생들의 과목별 세부능력 및 특기사항(과세특)을 작성하는 업무를 맡고 있습니다.
@@ -300,7 +321,7 @@ ${subjectContext}
 사실성 및 내용 제한: 입력된 활동 내용 외 절대 날조 금지.
 
 입력된 활동 내용:
-${activitiesText}
+${activitiesText}${individualActivityText}
 
 ${gradePrompts[student.grade]}
 ${lengthInstruction}
@@ -311,9 +332,26 @@ ${lengthInstruction}
     `;
     };
 
+    // 학생별 개별 활동과 공통 활동 간의 관련성 점수 계산
+    const calculateRelevanceScore = (commonActivity, individualActivity) => {
+        if (!individualActivity || !commonActivity) return 0;
+        const commonWords = commonActivity.toLowerCase().split(/\s+/);
+        const individualWords = individualActivity.toLowerCase().split(/\s+/);
+        let score = 0;
+        for (const word of commonWords) {
+            if (word.length > 1 && individualWords.some(iw => iw.includes(word) || word.includes(iw))) {
+                score += 1;
+            }
+        }
+        return score;
+    };
+
     const generateForStudent = async (student) => {
         const validActivities = activities.filter(a => a.trim() !== "");
-        if (validActivities.length === 0) return;
+        if (validActivities.length === 0 && !student.individualActivity?.trim()) {
+            alert("활동 내용을 입력해주세요.");
+            return;
+        }
 
         // Calculate Target Chars
         let targetChars = 500;
@@ -322,27 +360,40 @@ ${lengthInstruction}
         else if (textLength === "600") targetChars = 200;
         else if (textLength === "manual") targetChars = parseInt(manualLength) || 500;
 
-        // Always shuffle activities to ensure variety across students
-        const shuffledActivities = [...validActivities].sort(() => 0.5 - Math.random());
-        let selectedActivities = shuffledActivities;
+        let selectedActivities = [...validActivities];
+
+        // 학생별 개별 활동이 있으면 관련성 높은 활동 우선 선택
+        if (student.individualActivity?.trim() && validActivities.length > 0) {
+            // 관련성 점수로 정렬 (높은 점수 우선)
+            selectedActivities = [...validActivities].sort((a, b) => {
+                const scoreA = calculateRelevanceScore(a, student.individualActivity);
+                const scoreB = calculateRelevanceScore(b, student.individualActivity);
+                if (scoreB !== scoreA) return scoreB - scoreA;
+                return Math.random() - 0.5; // 동점일 경우 랜덤
+            });
+            console.log(`[활동 선택] ${student.name}: 개별활동 "${student.individualActivity}"와 관련성 순으로 정렬`);
+        } else {
+            // 개별 활동 없으면 기존처럼 랜덤 셔플
+            selectedActivities = [...validActivities].sort(() => 0.5 - Math.random());
+        }
 
         // Activity Selection Logic based on Target Chars - 강화된 로직
         if (targetChars < 80) {
             // 매우 짧으면 1개만 선택
-            selectedActivities = shuffledActivities.slice(0, 1);
+            selectedActivities = selectedActivities.slice(0, 1);
         } else if (targetChars <= 150) {
             // 150자 이하: 최대 2개
-            selectedActivities = shuffledActivities.slice(0, Math.min(2, shuffledActivities.length));
+            selectedActivities = selectedActivities.slice(0, Math.min(2, selectedActivities.length));
         } else if (targetChars <= 250) {
             // 250자 이하: 최대 3개
-            selectedActivities = shuffledActivities.slice(0, Math.min(3, shuffledActivities.length));
+            selectedActivities = selectedActivities.slice(0, Math.min(3, selectedActivities.length));
         } else if (targetChars <= 350) {
             // 350자 이하 (1000byte): 최대 4개
-            selectedActivities = shuffledActivities.slice(0, Math.min(4, shuffledActivities.length));
+            selectedActivities = selectedActivities.slice(0, Math.min(4, selectedActivities.length));
         }
         // 350자 초과: 모든 활동 사용
 
-        const prompt = generatePrompt(student, selectedActivities, targetChars);
+        const prompt = generatePrompt(student, selectedActivities, targetChars, student.individualActivity || "");
 
         try {
             updateStudent(student.id, "status", "loading");
@@ -679,6 +730,21 @@ ${lengthInstruction}
                                                 {grade}
                                             </button>
                                         ))}
+                                    </div>
+
+                                    {/* 학생별 개별 활동 내용 입력 */}
+                                    <div className="form-group" style={{ marginBottom: 0, marginTop: '8px' }}>
+                                        <textarea
+                                            value={student.individualActivity}
+                                            onChange={(e) => updateStudent(student.id, "individualActivity", e.target.value)}
+                                            placeholder="학생별 개별적으로 활동한 내용을 입력해주세요."
+                                            className="form-textarea"
+                                            style={{
+                                                minHeight: '60px',
+                                                fontSize: '0.85rem',
+                                                resize: 'vertical'
+                                            }}
+                                        />
                                     </div>
 
                                     {/* Action Buttons (Generate & Clear) */}
