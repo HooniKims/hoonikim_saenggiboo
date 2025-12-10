@@ -93,7 +93,7 @@ export default function BehaviorPage() {
 
                     // 행동 관찰 결과 열 인식: 다양한 키워드 지원
                     // cellValue는 공백이 제거된 상태이므로 공백 없는 키워드로 비교
-                    if (cellValue.includes("관찰결과") || cellValue.includes("행동관찰") ||
+                    if (cellValue.includes("관찰 결과") || cellValue.includes("행동 관찰") ||
                         cellValue.includes("행발") || cellValue.includes("행동") ||
                         cellValue.includes("관찰") || cellValue.includes("결과") ||
                         cellValue.includes("특성") || cellValue.includes("종합의견")) {
