@@ -77,7 +77,7 @@ async function startAutoFill(type) {
     const activeEl = document.activeElement;
     if (activeEl && (activeEl.tagName === 'TEXTAREA' || activeEl.tagName === 'INPUT')) {
         if (confirm(`현재 선택된 칸부터 '${students[0].name}' 학생의 데이터를 입력하시겠습니까?`)) {
-            processAutoFillByName(students);
+            processAutoFillByName(students, type);
             return;
         }
     }
@@ -99,7 +99,7 @@ async function startAutoFill(type) {
             removeFloatingBanner();
 
             if (confirm(`'${students[0].name}' 학생부터 입력을 시작하시겠습니까?`)) {
-                processAutoFillByName(students);
+                processAutoFillByName(students, type);
             }
         }
     };
@@ -110,7 +110,7 @@ async function startAutoFill(type) {
 }
 
 // NEW: Process autofill by finding student names in the grid
-async function processAutoFillByName(students) {
+async function processAutoFillByName(students, type = 'gwasetuk') {
     let successCount = 0;
     let skippedCount = 0;
     let notFoundCount = 0;
@@ -253,8 +253,8 @@ async function processAutoFillByName(students) {
         return null;
     }
 
-    // Activate the textarea in the row (세부능력 및 특기사항 column)
-    async function activateTextareaInRow(row, rowIndex) {
+    // Activate the textarea in the row (세부능력 및 특기사항 or 행동특성 column)
+    async function activateTextareaInRow(row, rowIndex, type = 'gwasetuk') {
         const cells = row.querySelectorAll('.cl-grid-cell');
         if (cells.length === 0) {
             console.log(`Row ${rowIndex}: No cells found`);
@@ -303,13 +303,18 @@ async function processAutoFillByName(students) {
             }
         }
 
-        // Strategy 4: Look for any cell with "세부능력" or "특기사항" in aria-label
+        // Strategy 4: Look for any cell with target keywords in aria-label
+        // 과세특: '세부능력', '특기사항' / 행발: '행동특성', '종합의견', '행동', '특성'
         if (!targetCell) {
+            const gwasetukKeywords = ['세부능력', '특기사항'];
+            const haengbalKeywords = ['행동특성', '종합의견', '행동', '특성'];
+            const keywords = type === 'haengbal' ? haengbalKeywords : gwasetukKeywords;
+
             for (let i = cells.length - 1; i >= 0; i--) {
                 const cell = cells[i];
                 const ariaLabel = cell.getAttribute('aria-label') || '';
-                if (ariaLabel.includes('세부능력') || ariaLabel.includes('특기사항')) {
-                    console.log(`Row ${rowIndex}: Found cell ${i} via aria-label: "${ariaLabel.substring(0, 30)}..."`);
+                if (keywords.some(kw => ariaLabel.includes(kw))) {
+                    console.log(`Row ${rowIndex}: Found cell ${i} via aria-label (type=${type}): "${ariaLabel.substring(0, 30)}..."`);
                     targetCell = cell;
                     break;
                 }
@@ -825,7 +830,7 @@ async function processAutoFillByName(students) {
         }
 
         // Activate the textarea in this row
-        const textarea = await activateTextareaInRow(row, rowIndex);
+        const textarea = await activateTextareaInRow(row, rowIndex, type);
 
         if (!textarea) {
             console.warn(`Row ${rowIndex}: 입력 칸 활성화 실패. 건너뜀.`);

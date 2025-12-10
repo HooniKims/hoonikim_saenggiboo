@@ -230,3 +230,12 @@ NEIS 자동 입력 크롬 확장 프로그램 개발이 완료되었습니다.
     - [x] 글자수 제한 시 학생별 활동과 관련성 높은 공통 활동 우선 선택
     - [x] `calculateRelevanceScore` 함수로 키워드 기반 관련성 점수 계산
 
+## Phase 14: 크롬 확장 프로그램 행발 자동 입력 기능 수정 (완료)
+- [x] **셀 탐색 로직 타입별 분기 (`chrome_ex/content_script.js`)**
+    - [x] `processAutoFillByName` 함수에 `type` 매개변수 추가
+    - [x] `activateTextareaInRow` 함수에 `type` 매개변수 추가
+    - [x] Strategy 4 키워드 분기:
+        - 과세특: '세부능력', '특기사항'
+        - 행발: '행동특성', '종합의견', '행동', '특성'
+    - [x] `startAutoFill`에서 `type` 매개변수 전달
+

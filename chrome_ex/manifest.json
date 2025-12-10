@@ -1,7 +1,7 @@
 {
     "manifest_version": 3,
     "name": "나이스 자동입력 도우미",
-    "version": "1.0",
+    "version": "1.1",
     "description": "생기부 작성 도우미 데이터를 나이스에 자동 입력합니다.",
     "permissions": [
         "activeTab",
