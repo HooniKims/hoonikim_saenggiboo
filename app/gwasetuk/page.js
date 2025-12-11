@@ -17,6 +17,7 @@ export default function GwasetukPage() {
 
     const [students, setStudents] = useState([{ id: 1, name: "", grade: "A", individualActivity: "", result: "", status: "idle" }]);
     const [activities, setActivities] = useState([""]);
+    const [additionalInstructions, setAdditionalInstructions] = useState(""); // 추가 지침 사항
     const [textLength, setTextLength] = useState("1500"); // 1500, 1000, 600, manual
     const [manualLength, setManualLength] = useState("");
     const [isGenerating, setIsGenerating] = useState(false);
@@ -256,6 +257,12 @@ ${subjectContext}
 3. 전체적인 내용을 요약하거나 정리하는 문장(마무리 멘트)을 작성하지 말 것.
 4. 개별적 관찰 기록, 반드시 명사형 종결어미(~함, ~임 등) 사용, 특정 표현 금지, ${targetLevel} 수준에 맞는 어휘와 표현 사용.
 사실성 및 내용 제한: 입력된 활동 내용 외 절대 날조 금지.
+${additionalInstructions.trim() ? `
+## ⚠️ 반드시 지켜야 할 추가 지침 (최우선 적용) ⚠️
+아래 지침은 다른 모든 규칙보다 우선하여 반드시 엄격히 준수해야 합니다:
+${additionalInstructions}
+---
+` : ""}
 
 입력된 활동 내용:
 ${activitiesText}${individualActivityText}
@@ -558,6 +565,30 @@ ${lengthInstruction}
                         >
                             <Plus size={18} /> 활동 추가
                         </button>
+
+                        {/* 추가 지침 사항 */}
+                        <div className="form-group" style={{ marginTop: '16px', marginBottom: 0 }}>
+                            <label className="form-label" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                <span style={{ color: '#dc2626', fontWeight: 'bold' }}>⚠</span>
+                                추가 지침 사항 (선택)
+                            </label>
+                            <textarea
+                                value={additionalInstructions}
+                                onChange={(e) => setAdditionalInstructions(e.target.value)}
+                                placeholder="예: 축구는 단체 경기가 아닌 개인별 수행 내용을 기준으로 작성해 주세요."
+                                className="form-textarea"
+                                style={{
+                                    minHeight: '70px',
+                                    fontSize: '0.9rem',
+                                    resize: 'vertical',
+                                    borderColor: '#fecaca',
+                                    backgroundColor: '#fef2f2'
+                                }}
+                            />
+                            <p style={{ fontSize: '0.75rem', color: '#6b7280', marginTop: '4px' }}>
+                                위 지침은 AI가 최우선으로 엄격히 준수합니다.
+                            </p>
+                        </div>
                     </div>
                 </div>
             </div>

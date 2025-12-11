@@ -369,32 +369,36 @@ async function processAutoFillByName(students, type = 'gwasetuk') {
         // Row should already be scrolled to center by main loop, just ensure cell is visible
         await new Promise(resolve => setTimeout(resolve, 100));
 
-        // CRITICAL: Force-close any currently active textarea before trying to activate new one
-        // This is especially important after encountering disabled rows (장기결석 등)
-        if (document.activeElement && document.activeElement.tagName === 'TEXTAREA') {
-            console.log(`Row ${rowIndex}: Force-closing previous textarea with Tab key (saves data)...`);
+        // CRITICAL: If there's an active textarea, use Tab navigation to move to next cell
+        // Tab key lets NEIS handle the transition (saves data + opens next textarea automatically)
+        const prevTextarea = document.querySelector('textarea.cl-text:not([readonly])');
+        if (prevTextarea || (document.activeElement && document.activeElement.tagName === 'TEXTAREA')) {
+            const activeTA = prevTextarea || document.activeElement;
+            console.log(`Row ${rowIndex}: Using Tab navigation from previous textarea...`);
 
-            // Use Tab key instead of ESC to save data and move to next cell
-            // ESC key cancels the edit and loses data!
-            simulateKeyEvent(document.activeElement, 'keydown', 'Tab', 9);
-            simulateKeyEvent(document.activeElement, 'keyup', 'Tab', 9);
-            await new Promise(resolve => setTimeout(resolve, 300));
+            // Tab key to move to next cell (NEIS will auto-create new textarea)
+            activeTA.focus();
+            await new Promise(resolve => setTimeout(resolve, 100));
+            simulateKeyEvent(activeTA, 'keydown', 'Tab', 9);
+            simulateKeyEvent(activeTA, 'keyup', 'Tab', 9);
+            await new Promise(resolve => setTimeout(resolve, 400));
 
-            // Blur the textarea
-            if (document.activeElement && document.activeElement.tagName === 'TEXTAREA') {
-                document.activeElement.blur();
+            // Check if a new textarea appeared for our target row
+            const newTextarea = findActiveTextareaInDocument(rowIndex);
+            if (newTextarea) {
+                console.log(`Row ${rowIndex}: ✓ Tab navigation successful! New textarea found.`);
+                newTextarea.focus();
+                await new Promise(resolve => setTimeout(resolve, 100));
+                return newTextarea;
             }
-            await new Promise(resolve => setTimeout(resolve, 300));
 
-            // Click on an empty area of the grid to fully reset edit state
-            const gridBody = document.querySelector('.cl-grid-body');
-            if (gridBody) {
-                simulateClick(gridBody, 'click');
+            // If Tab didn't create the right textarea, we need to close and try cell activation
+            console.log(`Row ${rowIndex}: Tab didn't create expected textarea, will try cell activation...`);
+            const stillActive = document.querySelector('textarea.cl-text:not([readonly])');
+            if (stillActive) {
+                stillActive.blur();
                 await new Promise(resolve => setTimeout(resolve, 200));
             }
-
-            // Extra wait for NEIS to fully process the close
-            await new Promise(resolve => setTimeout(resolve, 200));
         }
 
         // Try multiple activation methods
@@ -618,13 +622,13 @@ async function processAutoFillByName(students, type = 'gwasetuk') {
         const activationMethods = [
             // Method 1: Direct click on cell
             async () => {
-                console.log(`Row ${rowIndex}: Trying direct click...`);
+                console.log(`Row ${rowIndex}: [Method 1] Direct click on cell...`);
                 targetCell.click();
                 await new Promise(resolve => setTimeout(resolve, 300));
             },
-            // Method 2: Double-click sequence
+            // Method 2: Double-click sequence (mousedown → mouseup → click → dblclick)
             async () => {
-                console.log(`Row ${rowIndex}: Trying double-click...`);
+                console.log(`Row ${rowIndex}: [Method 2] Double-click sequence...`);
                 simulateClick(targetCell, 'mousedown');
                 await new Promise(resolve => setTimeout(resolve, 30));
                 simulateClick(targetCell, 'mouseup');
@@ -636,7 +640,7 @@ async function processAutoFillByName(students, type = 'gwasetuk') {
             },
             // Method 3: Focus + Enter key
             async () => {
-                console.log(`Row ${rowIndex}: Trying focus + Enter...`);
+                console.log(`Row ${rowIndex}: [Method 3] Focus + Enter key...`);
                 targetCell.focus();
                 await new Promise(resolve => setTimeout(resolve, 100));
                 simulateKeyEvent(targetCell, 'keydown', 'Enter', 13);
@@ -646,23 +650,193 @@ async function processAutoFillByName(students, type = 'gwasetuk') {
             },
             // Method 4: Focus + F2 key
             async () => {
-                console.log(`Row ${rowIndex}: Trying focus + F2...`);
+                console.log(`Row ${rowIndex}: [Method 4] Focus + F2 key...`);
                 targetCell.focus();
                 await new Promise(resolve => setTimeout(resolve, 100));
                 simulateKeyEvent(targetCell, 'keydown', 'F2', 113);
                 simulateKeyEvent(targetCell, 'keyup', 'F2', 113);
                 await new Promise(resolve => setTimeout(resolve, 400));
             },
-            // Method 5: Click on the control wrapper inside the cell
+            // Method 5: Click on control wrapper
             async () => {
                 const controlWrapper = targetCell.querySelector('.cl-control');
                 if (controlWrapper) {
-                    console.log(`Row ${rowIndex}: Trying click on control wrapper...`);
+                    console.log(`Row ${rowIndex}: [Method 5] Click on .cl-control wrapper...`);
                     simulateClick(controlWrapper, 'click');
                     await new Promise(resolve => setTimeout(resolve, 200));
                     simulateClick(controlWrapper, 'dblclick');
                     await new Promise(resolve => setTimeout(resolve, 400));
+                } else {
+                    console.log(`Row ${rowIndex}: [Method 5] No .cl-control found, skipping`);
                 }
+            },
+            // Method 6: Coordinate-based MouseEvent (정확한 좌표로 클릭)
+            async () => {
+                console.log(`Row ${rowIndex}: [Method 6] Coordinate-based MouseEvent...`);
+                const rect = targetCell.getBoundingClientRect();
+                const centerX = rect.left + rect.width / 2;
+                const centerY = rect.top + rect.height / 2;
+                console.log(`Row ${rowIndex}: Cell center at (${centerX.toFixed(0)}, ${centerY.toFixed(0)})`);
+
+                const events = ['mousedown', 'mouseup', 'click', 'dblclick'];
+                for (const eventType of events) {
+                    const event = new MouseEvent(eventType, {
+                        bubbles: true,
+                        cancelable: true,
+                        view: window,
+                        clientX: centerX,
+                        clientY: centerY,
+                        button: 0
+                    });
+                    targetCell.dispatchEvent(event);
+                    await new Promise(resolve => setTimeout(resolve, 100));
+                }
+                await new Promise(resolve => setTimeout(resolve, 300));
+            },
+            // Method 7: Click on textarea-wrap inside cell
+            async () => {
+                const textareaWrap = targetCell.querySelector('.cl-textarea-wrap');
+                if (textareaWrap) {
+                    console.log(`Row ${rowIndex}: [Method 7] Click on .cl-textarea-wrap...`);
+                    textareaWrap.click();
+                    await new Promise(resolve => setTimeout(resolve, 200));
+                    textareaWrap.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+                    await new Promise(resolve => setTimeout(resolve, 400));
+                } else {
+                    console.log(`Row ${rowIndex}: [Method 7] No .cl-textarea-wrap found, skipping`);
+                }
+            },
+            // Method 8: Click on Row first, then Cell (행 선택 후 셀 편집)
+            async () => {
+                console.log(`Row ${rowIndex}: [Method 8] Click Row first, then Cell...`);
+                row.click();
+                await new Promise(resolve => setTimeout(resolve, 200));
+                targetCell.click();
+                await new Promise(resolve => setTimeout(resolve, 200));
+                simulateClick(targetCell, 'dblclick');
+                await new Promise(resolve => setTimeout(resolve, 400));
+            },
+            // Method 9: PointerEvent 사용 (터치/마우스 통합)
+            async () => {
+                console.log(`Row ${rowIndex}: [Method 9] PointerEvent dispatch...`);
+                const rect = targetCell.getBoundingClientRect();
+                const centerX = rect.left + rect.width / 2;
+                const centerY = rect.top + rect.height / 2;
+
+                const pointerEvents = ['pointerdown', 'pointerup'];
+                for (const eventType of pointerEvents) {
+                    const event = new PointerEvent(eventType, {
+                        bubbles: true,
+                        cancelable: true,
+                        view: window,
+                        clientX: centerX,
+                        clientY: centerY,
+                        button: 0,
+                        pointerType: 'mouse'
+                    });
+                    targetCell.dispatchEvent(event);
+                    await new Promise(resolve => setTimeout(resolve, 50));
+                }
+                targetCell.click();
+                await new Promise(resolve => setTimeout(resolve, 400));
+            },
+            // Method 10: Focus + Space key
+            async () => {
+                console.log(`Row ${rowIndex}: [Method 10] Focus + Space key...`);
+                targetCell.focus();
+                await new Promise(resolve => setTimeout(resolve, 100));
+                simulateKeyEvent(targetCell, 'keydown', ' ', 32);
+                simulateKeyEvent(targetCell, 'keypress', ' ', 32);
+                simulateKeyEvent(targetCell, 'keyup', ' ', 32);
+                await new Promise(resolve => setTimeout(resolve, 400));
+            },
+            // Method 11: scrollIntoView + Delay + Click (스크롤 후 클릭)
+            async () => {
+                console.log(`Row ${rowIndex}: [Method 11] ScrollIntoView + Delay + Click...`);
+                targetCell.scrollIntoView({ behavior: 'instant', block: 'center', inline: 'center' });
+                await new Promise(resolve => setTimeout(resolve, 500));
+
+                // Re-get cell after scroll (DOM might have changed)
+                const freshCell = document.querySelector(`.cl-grid-row[data-rowindex="${rowIndex}"] .cl-grid-cell:nth-child(${cells.length})`);
+                if (freshCell) {
+                    freshCell.click();
+                    await new Promise(resolve => setTimeout(resolve, 200));
+                    freshCell.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+                } else {
+                    targetCell.click();
+                }
+                await new Promise(resolve => setTimeout(resolve, 400));
+            },
+            // Method 12: Click grid body to reset, then click cell (포커스 리셋)
+            async () => {
+                console.log(`Row ${rowIndex}: [Method 12] Grid body reset + Cell click...`);
+                const gridBody = document.querySelector('.cl-grid-body');
+                if (gridBody) {
+                    gridBody.click();
+                    await new Promise(resolve => setTimeout(resolve, 300));
+                }
+                targetCell.click();
+                await new Promise(resolve => setTimeout(resolve, 200));
+                simulateClick(targetCell, 'dblclick');
+                await new Promise(resolve => setTimeout(resolve, 400));
+            },
+            // Method 13: Tab navigation from current active element
+            async () => {
+                console.log(`Row ${rowIndex}: [Method 13] Tab navigation from active element...`);
+                const activeEl = document.activeElement;
+                if (activeEl) {
+                    simulateKeyEvent(activeEl, 'keydown', 'Tab', 9);
+                    simulateKeyEvent(activeEl, 'keyup', 'Tab', 9);
+                    await new Promise(resolve => setTimeout(resolve, 500));
+                }
+                await new Promise(resolve => setTimeout(resolve, 200));
+            },
+            // Method 14: Find and click any element with 행동특성/종합의견 in aria-label
+            async () => {
+                console.log(`Row ${rowIndex}: [Method 14] Aria-label based cell search...`);
+                const allCells = row.querySelectorAll('.cl-grid-cell');
+                for (const cell of allCells) {
+                    const ariaLabel = cell.getAttribute('aria-label') || '';
+                    if (ariaLabel.includes('행동특성') || ariaLabel.includes('종합의견') ||
+                        ariaLabel.includes('행동') || ariaLabel.includes('특성')) {
+                        console.log(`Row ${rowIndex}: Found cell with aria-label: "${ariaLabel.substring(0, 30)}..."`);
+                        cell.click();
+                        await new Promise(resolve => setTimeout(resolve, 200));
+                        cell.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+                        await new Promise(resolve => setTimeout(resolve, 400));
+                        break;
+                    }
+                }
+            },
+            // Method 15: dispatchEvent with isTrusted simulation
+            async () => {
+                console.log(`Row ${rowIndex}: [Method 15] dispatchEvent with full event options...`);
+                const rect = targetCell.getBoundingClientRect();
+                const mouseInit = {
+                    bubbles: true,
+                    cancelable: true,
+                    view: window,
+                    detail: 1,
+                    screenX: rect.left + rect.width / 2,
+                    screenY: rect.top + rect.height / 2,
+                    clientX: rect.left + rect.width / 2,
+                    clientY: rect.top + rect.height / 2,
+                    ctrlKey: false,
+                    altKey: false,
+                    shiftKey: false,
+                    metaKey: false,
+                    button: 0,
+                    buttons: 1,
+                    relatedTarget: null
+                };
+                targetCell.dispatchEvent(new MouseEvent('mousedown', mouseInit));
+                await new Promise(resolve => setTimeout(resolve, 50));
+                targetCell.dispatchEvent(new MouseEvent('mouseup', { ...mouseInit, buttons: 0 }));
+                await new Promise(resolve => setTimeout(resolve, 50));
+                targetCell.dispatchEvent(new MouseEvent('click', { ...mouseInit, detail: 1 }));
+                await new Promise(resolve => setTimeout(resolve, 100));
+                targetCell.dispatchEvent(new MouseEvent('dblclick', { ...mouseInit, detail: 2 }));
+                await new Promise(resolve => setTimeout(resolve, 400));
             }
         ];
 
@@ -706,20 +880,11 @@ async function processAutoFillByName(students, type = 'gwasetuk') {
         for (const method of activationMethods) {
             await method();
 
-            // Check if textarea appeared in the TARGET CELL (original check)
-            let textarea = targetCell.querySelector('textarea.cl-text:not([readonly])') ||
-                targetCell.querySelector('textarea:not([readonly])');
+            // Wait a bit for textarea to appear
+            await new Promise(resolve => setTimeout(resolve, 150));
 
-            if (textarea && !textarea.readOnly) {
-                console.log(`Row ${rowIndex}: ✓ Textarea activated successfully (in cell)`);
-                textarea.focus();
-                await new Promise(resolve => setTimeout(resolve, 100));
-                return textarea;
-            }
-
-            // IMPORTANT: NEIS uses a floating textarea that may NOT be inside the row element
-            // Check the entire document for a textarea matching our row number via aria-label
-            textarea = findActiveTextareaInDocument(rowIndex);
+            // Check in the document for textarea matching our row (NEIS uses floating textarea)
+            let textarea = findActiveTextareaInDocument(rowIndex);
             if (textarea) {
                 console.log(`Row ${rowIndex}: ✓ Textarea found via aria-label matching!`);
                 textarea.focus();
@@ -727,14 +892,26 @@ async function processAutoFillByName(students, type = 'gwasetuk') {
                 return textarea;
             }
 
-            // Fallback: check document.activeElement and verify it changed
+            // Check cell-local textarea
+            textarea = targetCell.querySelector('textarea.cl-text:not([readonly])') ||
+                targetCell.querySelector('textarea:not([readonly])');
+
+            if (textarea && !textarea.readOnly) {
+                const expectedAriaRow = rowIndex + 1;
+                if (isTextareaForRow(textarea, rowIndex)) {
+                    console.log(`Row ${rowIndex}: ✓ Textarea activated successfully (in cell, aria-row=${expectedAriaRow})`);
+                    textarea.focus();
+                    await new Promise(resolve => setTimeout(resolve, 100));
+                    return textarea;
+                }
+            }
+
+            // Check document.activeElement
             const currentActive = document.activeElement;
             if (currentActive &&
                 currentActive.tagName === 'TEXTAREA' &&
                 !currentActive.readOnly &&
                 currentActive !== previousActiveElement) {
-                // Accept this textarea - we clicked on the target cell and got a new textarea
-                // Don't strictly validate aria-label since NEIS row numbering can be inconsistent
                 const ariaLabel = currentActive.getAttribute('aria-label') || '';
                 console.log(`Row ${rowIndex}: ✓ New textarea activated (aria: "${ariaLabel.substring(0, 40)}...")`);
                 return currentActive;
@@ -853,18 +1030,30 @@ async function processAutoFillByName(students, type = 'gwasetuk') {
         // Highlight and fill
         textarea.style.backgroundColor = '#e6fffa';
         textarea.focus();
-        await new Promise(resolve => setTimeout(resolve, 100));
+        await new Promise(resolve => setTimeout(resolve, 150));
 
-        // Fill the data
-        textarea.value = student.result;
-        textarea.dispatchEvent(new Event('input', { bubbles: true }));
-        textarea.dispatchEvent(new Event('change', { bubbles: true }));
+        const dataToFill = student.result;
+        console.log(`Row ${rowIndex}: Filling "${dataToFill.substring(0, 30)}..." (${dataToFill.length} chars)`);
+
+        // ========== 과세특: 원래 단순한 방식 유지 ==========
+        if (type === 'gwasetuk') {
+            textarea.value = dataToFill;
+            textarea.dispatchEvent(new Event('input', { bubbles: true }));
+            textarea.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+        // ========== 행발: 과세특과 동일한 방식 (성공 검증됨) ==========
+        else {
+            textarea.value = dataToFill;
+            textarea.dispatchEvent(new Event('input', { bubbles: true }));
+            textarea.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+
+        console.log(`Row ${rowIndex}: Textarea final value length = ${textarea.value.length}`);
 
         successCount++;
         console.log(`✓ "${student.name}" 입력 완료 (Row ${rowIndex})`);
 
         // IMPORTANT: Blur the textarea after filling to properly close edit mode
-        // This ensures NEIS saves the data and next cell can be activated cleanly
         textarea.blur();
         await new Promise(resolve => setTimeout(resolve, 400));
     }
