@@ -18,6 +18,7 @@ export default function ClubPage() {
     // Removed 'grade' from student object, added 'individualActivity' for per-student activities
     const [students, setStudents] = useState([{ id: 1, name: "", individualActivity: "", result: "", status: "idle" }]);
     const [activities, setActivities] = useState([""]);
+    const [additionalInstructions, setAdditionalInstructions] = useState(""); // 추가 지침 사항
     const [textLength, setTextLength] = useState("1500");
     const [manualLength, setManualLength] = useState("");
     const [isGenerating, setIsGenerating] = useState(false);
@@ -272,7 +273,12 @@ export default function ClubPage() {
 - **오직 동아리 특기사항 본문만 출력하세요.**
 - **줄바꿈 없이 하나의 문단으로 작성하세요.**
 - **입력된 활동 내용에 없는 구체적인 사건, 실험 결과, 특정 도서명 등을 절대 지어내지 마세요.**
-
+${additionalInstructions.trim() ? `
+## ⚠️ 반드시 지켜야 할 추가 지침 (최우선 적용) ⚠️
+아래 지침은 다른 모든 규칙보다 우선하여 반드시 엄격히 준수해야 합니다:
+${additionalInstructions}
+---
+` : ""}
 대상 학교급: ${targetLevel}
 ${clubContext}
 
@@ -320,16 +326,16 @@ ${lengthInstruction}
         // Activity Selection Logic based on Target Chars - 강화된 로직
         if (targetChars < 80) {
             // 매우 짧으면 1개만 선택
-            selectedActivities = shuffledActivities.slice(0, 1);
+            selectedActivities = selectedActivities.slice(0, 1);
         } else if (targetChars <= 150) {
             // 150자 이하: 최대 2개
-            selectedActivities = shuffledActivities.slice(0, Math.min(2, shuffledActivities.length));
+            selectedActivities = selectedActivities.slice(0, Math.min(2, selectedActivities.length));
         } else if (targetChars <= 250) {
             // 250자 이하: 최대 3개
-            selectedActivities = shuffledActivities.slice(0, Math.min(3, shuffledActivities.length));
+            selectedActivities = selectedActivities.slice(0, Math.min(3, selectedActivities.length));
         } else if (targetChars <= 350) {
             // 350자 이하 (1000byte): 최대 4개
-            selectedActivities = shuffledActivities.slice(0, Math.min(4, shuffledActivities.length));
+            selectedActivities = selectedActivities.slice(0, Math.min(4, selectedActivities.length));
         }
         // 350자 초과: 모든 활동 사용
 
@@ -560,6 +566,30 @@ ${lengthInstruction}
                         >
                             <Plus size={18} /> 활동 추가
                         </button>
+
+                        {/* 추가 지침 사항 */}
+                        <div className="form-group" style={{ marginTop: '16px', marginBottom: 0 }}>
+                            <label className="form-label" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                <span style={{ color: '#dc2626', fontWeight: 'bold' }}>⚠</span>
+                                추가 지침 사항 (선택)
+                            </label>
+                            <textarea
+                                value={additionalInstructions}
+                                onChange={(e) => setAdditionalInstructions(e.target.value)}
+                                placeholder="예: 토론 활동은 주제와 본인의 입장을 중심으로 작성해 주세요."
+                                className="form-textarea"
+                                style={{
+                                    minHeight: '70px',
+                                    fontSize: '0.9rem',
+                                    resize: 'vertical',
+                                    borderColor: '#fecaca',
+                                    backgroundColor: '#fef2f2'
+                                }}
+                            />
+                            <p style={{ fontSize: '0.75rem', color: '#6b7280', marginTop: '4px' }}>
+                                위 지침은 AI가 최우선으로 엄격히 준수합니다.
+                            </p>
+                        </div>
                     </div>
                 </div>
             </div>

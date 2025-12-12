@@ -376,4 +376,18 @@ NEIS 자동 입력 크롬 확장 프로그램 개발이 완료되었습니다.
 - [x] **반응형 CSS 지원 (`app/globals.css`)**
     - [x] 모바일에서 세로 배치 전환
 
+## Phase 21: 동아리 세특 버그 수정 및 추가 지침 기능 추가 (완료)
+- [x] **버그 수정 (`app/club/page.js`)**
+    - [x] `generateForStudent` 함수에서 `shuffledActivities` → `selectedActivities` 변수명 오류 수정
+    - [x] 정의되지 않은 변수 참조로 인한 생성 실패 문제 해결
+- [x] **추가 지침 사항 기능 추가 (`app/club/page.js`)**
+    - [x] `additionalInstructions` state 변수 추가
+    - [x] `generatePrompt` 함수에 추가 지침 섹션 추가 (최우선 적용)
+    - [x] UI에 추가 지침 입력 textarea 추가 (과세특과 동일한 스타일)
+    - [x] 빨간색 테마로 중요도 시각적 강조
+    - [x] 플레이스홀더: "예: 토론 활동은 주제와 본인의 입장을 중심으로 작성해 주세요."
+
+### 확인된 기존 기능 (정상 작동)
+- 활동 순서 랜덤 셔플: 개별 활동 없을 시 `sort(() => 0.5 - Math.random())` 적용
+- 개별 활동 있을 시 관련성 점수 기반 정렬 + 동점 시 랜덤
 
