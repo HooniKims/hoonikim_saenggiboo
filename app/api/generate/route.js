@@ -23,12 +23,18 @@ export async function POST(req) {
         // 시스템 메시지에 추가 지침 포함 (AI가 더 엄격하게 따름)
         let systemMessage = "You are a helpful assistant for Korean teachers. You help write student evaluations for school records.";
 
-        if (additionalInstructions && additionalInstructions.trim()) {
+        // 동적 모델 선택: 추가 지침이 있으면 GPT-4o, 없으면 GPT-4o-mini (비용 절감)
+        const hasAdditionalInstructions = additionalInstructions && additionalInstructions.trim();
+        const model = hasAdditionalInstructions ? "gpt-4o" : "gpt-4o-mini";
+
+        if (hasAdditionalInstructions) {
             systemMessage += `\n\n【CRITICAL INSTRUCTION - MUST FOLLOW】\nThe user has specified the following special instruction that you MUST follow strictly. This instruction overrides all other rules:\n→ "${additionalInstructions}"\n\nYou MUST follow this instruction exactly. Failure to do so will invalidate the response.`;
         }
 
+        console.log(`[API] 모델: ${model} | 추가 지침: ${hasAdditionalInstructions ? '있음' : '없음'}`);
+
         const completion = await openai.chat.completions.create({
-            model: "gpt-4o",
+            model: model,
             messages: [
                 { role: "system", content: systemMessage },
                 { role: "user", content: prompt },

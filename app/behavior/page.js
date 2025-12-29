@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useRef } from "react";
-import { Trash2, Download, Wand2, Users, UserX } from "lucide-react";
+import { Trash2, Download, Wand2, Users, UserX, Copy } from "lucide-react";
 import * as XLSX from "xlsx";
 import { writeExcel } from "../../utils/excel";
 import { cleanMetaInfo, truncateToCompleteSentence, getCharacterGuideline, getPromptCharLimit } from "../../utils/textProcessor";
@@ -560,6 +560,54 @@ ${lengthInstruction}
                                             </div>
                                         )}
                                     </div>
+
+                                    {/* 복사 버튼 */}
+                                    {student.result && (
+                                        <div className="flex justify-end mt-2">
+                                            <button
+                                                onClick={() => {
+                                                    // Clipboard API fallback for HTTP
+                                                    const copyText = (text) => {
+                                                        if (navigator.clipboard && window.isSecureContext) {
+                                                            navigator.clipboard.writeText(text);
+                                                        } else {
+                                                            const textarea = document.createElement('textarea');
+                                                            textarea.value = text;
+                                                            textarea.style.position = 'fixed';
+                                                            textarea.style.opacity = '0';
+                                                            document.body.appendChild(textarea);
+                                                            textarea.select();
+                                                            document.execCommand('copy');
+                                                            document.body.removeChild(textarea);
+                                                        }
+                                                    };
+                                                    copyText(student.result);
+                                                    const btn = document.getElementById(`copy-btn-behavior-${student.id}`);
+                                                    if (btn) {
+                                                        btn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg><span>복사됨!</span>';
+                                                        setTimeout(() => {
+                                                            btn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"></rect><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"></path></svg><span>복사</span>';
+                                                        }, 1500);
+                                                    }
+                                                }}
+                                                id={`copy-btn-behavior-${student.id}`}
+                                                className="btn-secondary"
+                                                style={{
+                                                    padding: '4px 10px',
+                                                    fontSize: '0.75rem',
+                                                    display: 'flex',
+                                                    alignItems: 'center',
+                                                    gap: '4px',
+                                                    color: '#6b7280',
+                                                    borderColor: '#e5e7eb'
+                                                }}
+                                                title="클립보드에 복사"
+                                            >
+                                                <Copy size={14} />
+                                                <span>복사</span>
+                                            </button>
+                                        </div>
+                                    )}
                                 </div>
                             </div>
                         </div>
