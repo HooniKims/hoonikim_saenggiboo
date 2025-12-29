@@ -322,14 +322,8 @@ ${additionalInstructions.trim() ? `
                 if (scoreB !== scoreA) return scoreB - scoreA;
                 return Math.random() - 0.5; // 동점일 경우 랜덤
             });
-            console.log(`[활동 선택] ${student.name}: 개별활동 "${student.individualActivity}"와 관련성 순으로 정렬`);
-        } else if (additionalInstructions.includes('순서')) {
-            // 추가 지침에 '순서' 키워드가 있으면 원래 순서 유지
-            console.log(`[활동 선택] 추가 지침에 '순서' 포함 - 입력 순서 유지`);
-        } else {
-            // 개별 활동 없으면 기존처럼 랜덤 셔플
-            selectedActivities = [...validActivities].sort(() => 0.5 - Math.random());
         }
+        // 개별 활동 없으면 원래 순서 유지 (AI가 추가 지침에 따라 선택/정렬)
 
         // Activity Selection Logic based on Target Chars - 강화된 로직
         if (targetChars < 80) {
