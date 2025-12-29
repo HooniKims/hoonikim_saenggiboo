@@ -286,19 +286,15 @@ ${clubContext}
 ${activitiesText}${individualActivityText}
 
 ${lengthInstruction}
-${additionalInstructions.trim() ? `
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-⚠️⚠️⚠️ 【최우선 필수 준수 지침】 ⚠️⚠️⚠️
-아래 지침은 위의 모든 규칙보다 우선합니다. 반드시 엄격히 준수하세요:
-
-${additionalInstructions}
-
-이 지침을 무시하면 생성 결과가 무효화됩니다.
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-` : ""}
 **절대 분석 내용이나 검증 포인트를 출력하지 마세요. 오직 동아리 특기사항 본문만 출력하세요.**
 **절대로 "(자세한 내용 포함, 330자)", "(약 500자)", "--- 330자" 같은 글자수나 메타 정보를 출력하지 마세요.**
 **오직 순수한 동아리 특기사항 본문 텍스트만 출력하세요. 어떤 부가 설명도 없이 본문만 출력합니다.**
+${additionalInstructions.trim() ? `
+
+【🚨 특별 지시 - 반드시 적용 🚨】
+사용자가 다음과 같이 명시적으로 요청했습니다. 이 지시를 반드시 따르세요:
+→ "${additionalInstructions}"
+위 지시를 무시하고 생성하면 결과가 무효화됩니다. 반드시 위 내용을 반영하여 작성하세요.` : ""}
     `;
     };
 
@@ -327,6 +323,9 @@ ${additionalInstructions}
                 return Math.random() - 0.5; // 동점일 경우 랜덤
             });
             console.log(`[활동 선택] ${student.name}: 개별활동 "${student.individualActivity}"와 관련성 순으로 정렬`);
+        } else if (additionalInstructions.includes('순서')) {
+            // 추가 지침에 '순서' 키워드가 있으면 원래 순서 유지
+            console.log(`[활동 선택] 추가 지침에 '순서' 포함 - 입력 순서 유지`);
         } else {
             // 개별 활동 없으면 기존처럼 랜덤 셔플
             selectedActivities = [...validActivities].sort(() => 0.5 - Math.random());
