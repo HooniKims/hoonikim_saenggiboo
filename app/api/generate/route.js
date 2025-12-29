@@ -4,7 +4,7 @@ import OpenAI from 'openai';
 export async function POST(req) {
     try {
         const body = await req.json();
-        const { prompt, apiKey } = body;
+        const { prompt, apiKey, additionalInstructions } = body;
 
         // Use provided API key or fallback to server env
         const finalApiKey = apiKey || process.env.OPENAI_API_KEY;
@@ -20,10 +20,17 @@ export async function POST(req) {
             apiKey: finalApiKey,
         });
 
+        // 시스템 메시지에 추가 지침 포함 (AI가 더 엄격하게 따름)
+        let systemMessage = "You are a helpful assistant for Korean teachers. You help write student evaluations for school records.";
+
+        if (additionalInstructions && additionalInstructions.trim()) {
+            systemMessage += `\n\n【CRITICAL INSTRUCTION - MUST FOLLOW】\nThe user has specified the following special instruction that you MUST follow strictly. This instruction overrides all other rules:\n→ "${additionalInstructions}"\n\nYou MUST follow this instruction exactly. Failure to do so will invalidate the response.`;
+        }
+
         const completion = await openai.chat.completions.create({
             model: "gpt-4o-mini",
             messages: [
-                { role: "system", content: "You are a helpful assistant for Korean teachers." },
+                { role: "system", content: systemMessage },
                 { role: "user", content: prompt },
             ],
             temperature: 0.7,
