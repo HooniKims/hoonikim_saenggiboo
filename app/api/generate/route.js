@@ -20,15 +20,25 @@ export async function POST(req) {
             apiKey: finalApiKey,
         });
 
-        // 시스템 메시지에 추가 지침 포함 (AI가 더 엄격하게 따름)
-        let systemMessage = "You are a helpful assistant for Korean teachers. You help write student evaluations for school records.";
+        // 시스템 메시지: 구체적이고 간결한 핵심 규칙 기반
+        let systemMessage = `학교생활기록부 작성 전문가. 반드시 지킬 규칙:
+1. 명사형 종결어미(~함, ~임, ~음)만 사용 (가정통신문 제외)
+2. '학생은', '이 학생은' 등 주어 없이 활동부터 서술
+3. 줄바꿈 없이 하나의 문단으로 작성
+4. 마지막 문장도 반드시 구체적 활동 서술로 끝냄 (요약/정리/결론 금지)
+5. 입력에 없는 활동 지어내기 금지
+6. 오직 본문 텍스트만 출력 (메타정보 절대 출력하지 않음)`;
 
         // 동적 모델 선택: 추가 지침이 있으면 GPT-4o, 없으면 GPT-4o-mini (비용 절감)
         const hasAdditionalInstructions = additionalInstructions && additionalInstructions.trim();
         const model = hasAdditionalInstructions ? "gpt-4o" : "gpt-4o-mini";
 
+        // Sandwich 기법: 추가 지침을 프롬프트 앞뒤에 감싸서 AI가 무시하지 않도록 강화
+        let finalPrompt = prompt;
         if (hasAdditionalInstructions) {
-            systemMessage += `\n\n【CRITICAL INSTRUCTION - MUST FOLLOW】\nThe user has specified the following special instruction that you MUST follow strictly. This instruction overrides all other rules:\n→ "${additionalInstructions}"\n\nYou MUST follow this instruction exactly. Failure to do so will invalidate the response.`;
+            const prefix = `[최우선 규칙] 다음 규칙을 반드시 지켜서 작성하라: ${additionalInstructions}\n\n`;
+            const suffix = `\n\n[다시 한번 강조] 위 본문 작성 시 반드시 적용할 규칙: ${additionalInstructions}`;
+            finalPrompt = prefix + prompt + suffix;
         }
 
         console.log(`[API] 모델: ${model} | 추가 지침: ${hasAdditionalInstructions ? '있음' : '없음'}`);
@@ -37,7 +47,7 @@ export async function POST(req) {
             model: model,
             messages: [
                 { role: "system", content: systemMessage },
-                { role: "user", content: prompt },
+                { role: "user", content: finalPrompt },
             ],
             temperature: 0.7,
         });
