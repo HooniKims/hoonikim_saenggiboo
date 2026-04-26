@@ -1,10 +1,16 @@
 "use client";
 
 import { useState, useRef } from "react";
-import { Trash2, Download, Wand2, Users, UserX } from "lucide-react";
+import { Trash2, Download, Wand2, Users, UserX, Copy, Check } from "lucide-react";
 import * as XLSX from "xlsx";
 import { writeExcel } from "../../utils/excel";
-import { cleanMetaInfo, truncateToCompleteSentence, getCharacterGuideline, getPromptCharLimit } from "../../utils/textProcessor";
+import { getCharacterGuideline, getMinimumTargetBytes, getUtf8ByteLength, normalizeTargetBytes, normalizeTargetChars } from "../../utils/textProcessor";
+import { fetchOpenAICompletion } from "../../utils/openAIFetch";
+import { useOpenAIKey } from "../../utils/openAIKey";
+import OpenAIKeyControl from "../../components/OpenAIKeyControl";
+import { generateWithSilentValidation } from "../../utils/generationHarness";
+import { runGenerationWithProgress } from "../../utils/generationProgress";
+import { buildShuffledKeywordContext } from "../../utils/letterKeywords";
 
 export default function LetterPage() {
     // State
@@ -12,11 +18,22 @@ export default function LetterPage() {
     const [isManualInput, setIsManualInput] = useState(false);
     const [manualCountValue, setManualCountValue] = useState("");
 
-    const [students, setStudents] = useState([{ id: 1, name: "", result: "", status: "idle" }]);
+    const [students, setStudents] = useState([{ id: 1, name: "", result: "", status: "idle", progress: "" }]);
     const [textLength, setTextLength] = useState("1500");
     const [manualLength, setManualLength] = useState("");
     const [isGenerating, setIsGenerating] = useState(false);
+    const [copiedId, setCopiedId] = useState(null);
     const fileInputRef = useRef(null);
+    const {
+        openAIKeyInput,
+        setOpenAIKeyInput,
+        appliedOpenAIKey,
+        applyOpenAIKey,
+        clearOpenAIKey,
+        isOpenAIKeyApplied,
+        maskedOpenAIKey,
+    } = useOpenAIKey();
+    const generationStatusText = appliedOpenAIKey ? "OpenAI API key를 사용하여 생성 중..." : "OpenAI API key 적용 필요";
 
     // Letter Specific State
     const [season, setSeason] = useState("summer"); // summer, winter
@@ -35,7 +52,7 @@ export default function LetterPage() {
         const newStudents = [...students];
         if (count > newStudents.length) {
             for (let i = newStudents.length + 1; i <= count; i++) {
-                newStudents.push({ id: i, name: "", result: "", status: "idle" });
+                newStudents.push({ id: i, name: "", result: "", status: "idle", progress: "" });
             }
         } else {
             newStudents.splice(count);
@@ -144,87 +161,104 @@ export default function LetterPage() {
     };
 
 
-    // cleanMetaInfo, truncateToCompleteSentence는 textProcessor에서 import됨
+    // 생성 결과 검증과 후처리는 generationHarness에서 내부 처리됨
 
     const generatePrompt = (targetChars) => {
         let minChar, maxChar;
         if (targetChars === 200) {
             minChar = 150; maxChar = 200;
-        } else if (targetChars === 500) {
-            minChar = 400; maxChar = 500;
+        } else if (targetChars === 490) {
+            minChar = 400; maxChar = 490;
         } else {
             minChar = Math.floor(targetChars * 0.8);
             maxChar = targetChars;
         }
 
         // 글자수 지침은 공통 유틸에서 생성
-        const lengthInstruction = getCharacterGuideline(targetChars);
+        const targetBytes = normalizeTargetBytes(textLength, manualLength);
+        const lengthInstruction = getCharacterGuideline(targetChars, targetBytes, getMinimumTargetBytes(targetBytes));
 
-        const keywordContext = keywords ? `강조 키워드: ${keywords}` : "강조 키워드: 학업, 건강, 친구관계, 가족관계";
+        const keywordContext = buildShuffledKeywordContext(keywords);
 
-        const seasonContext = season === "summer"
-            ? "학기 구분: 1학기 (여름방학)\n한 학기 동안의 성장과 노력을 기술하고, 여름방학 동안 가정에서 지도해야 할 점을 당부한다."
-            : "학기 구분: 학년말 (겨울방학)\n일년 동안의 성장과 노력을 기술하고, 겨울방학 및 새 학기 준비를 위해 가정에서 지도해야 할 점을 당부한다.";
+        let promptContent = "";
 
-        return `<입력 정보>
-${seasonContext}
+        const periodGoal = season === "summer"
+            ? "한 학기 동안 학교에서 보여준 긍정적인 모습과 노력, 그리고 여름방학 동안 가정에서 지도해야 할 점"
+            : "일년 동안 보여준 성취와 긍정적인 변화, 그리고 겨울방학 및 새 학기 준비를 위해 가정에서 지도해야 할 점";
+
+        return `당신은 담임 교사입니다. 학기말 통지표에 들어갈 '가정통신문(종합의견)' 본문을 작성하세요.
+
+<입력 정보>
 ${keywordContext}
-</입력 정보>
 
 <작성 규칙>
-1. 경어체(~합니다, ~바랍니다, ~입니다)를 사용하라 (명사형 종결어미 사용 금지)
-2. 주어 없이 서술을 시작하라 ("OO가", "자녀분이", "학생이" 등 주어 사용 금지)
-3. 모든 문장은 반드시 마침표(.)로 끝내라
-4. 입력된 키워드를 바탕으로 학생이 학교에서 보여준 긍정적인 모습과 노력을 구체적으로 서술하라
-5. 학교생활 전반적 모습과 가정 연계 지도 당부 중심으로 서술하라 (특정 과목명, 점수, 등수는 언급하지 않는다)
-6. 방학 동안 가정에서 학생을 위해 신경 써주어야 할 부분이나 지도가 필요한 부분을 조언하라
-7. 편지 형식이 아닌, 객관적이면서도 따뜻한 기술 형식으로 작성하라
-8. 줄바꿈 없이 하나의 문단으로 작성하라
-</작성 규칙>
+1. 작성 내용: 학생이 ${periodGoal}을 객관적이고 따뜻하게 기술할 것
+2. 편지 형식(예: "안녕하세요, 어머님")을 사용하지 않고 바로 본문만 서술
+3. 'OO가', '자녀분이', '학생이' 등 주어를 생략하고 바로 행동부터 서술
+4. 입력된 키워드(학업, 건강, 교우관계 등)를 바탕으로 구체적인 성장을 서술
+5. 특정 과목명(국어, 수학 등)이나 점수/등수는 절대 언급하지 않음
+6. 명사형 종결어미가 아닌, 경어체("~합니다.", "~습니다.", "~바랍니다.")와 마침표(.)로 문장을 완결되게 끝냄
+7. 줄바꿈 없이 하나의 문단으로 작성
+8. '마지막으로', '끝으로', '마무리하며', '덧붙여', '추가로' 같은 마무리 접속어를 사용하지 않음
+
+${lengthInstruction}
 
 <출력 형식>
-${lengthInstruction}
-오직 가정통신문 본문 텍스트만 출력하라. 글자수, 분석 내용, 메타 정보 등 부가 설명은 일체 포함하지 않는다.
-</출력 형식>
+- 오직 가정통신문 본문 텍스트만 출력
+- 글자수 표기, 분석, 검증 포인트, 부가 설명 등 메타 정보는 출력하지 않음
 
 <좋은 예시>
-"학교 생활에 성실하게 임하며 교우 관계가 원만하여 친구들의 의견을 잘 경청하고 배려하는 모습이 돋보입니다. 꾸준한 독서를 통해 깊이 있는 사고력을 기를 수 있도록 가정에서 격려해 주시기 바랍니다."
-</좋은 예시>
+"학교 생활에 성실하게 임하며 교우 관계가 원만하여 친구들의 의견을 잘 경청하고 배려하는 모습이 돋보입니다. 학업에 대한 열의를 가지고 수업 시간에 적극적으로 참여하며, 스스로 학습 계획을 세워 실천하는 자기주도적 학습 능력이 우수합니다. 방학 동안에는 규칙적인 생활 습관을 유지하고 꾸준한 독서를 통해 깊이 있는 사고력을 기를 수 있도록 가정에서 격려해 주시기 바랍니다."
     `;
     };
 
     const generateForStudent = async (student) => {
-        let targetChars = 500;
-        if (textLength === "1500") targetChars = 500;
-        else if (textLength === "1000") targetChars = 330;
-        else if (textLength === "600") targetChars = 200;
-        else if (textLength === "manual") targetChars = parseInt(manualLength) || 500;
+        if (!appliedOpenAIKey) {
+            alert("OpenAI API key를 먼저 적용해주세요.");
+            return;
+        }
+
+        const targetBytes = normalizeTargetBytes(textLength, manualLength);
+        const targetChars = normalizeTargetChars(textLength, manualLength);
+        const minTargetBytes = getMinimumTargetBytes(targetBytes);
 
         const prompt = generatePrompt(targetChars);
 
         try {
             updateStudent(student.id, "status", "loading");
-            const res = await fetch("/api/generate", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ prompt })
+            updateStudent(student.id, "progress", "생성 준비 중...");
+            const generationResult = await generateWithSilentValidation({
+                prompt,
+                maxTargetBytes: targetBytes,
+                minTargetBytes,
+                targetChars,
+                mode: "letter",
+                forbiddenTerms: [student.name],
+                maxRepairAttempts: 1,
+                generateOnce: (nextPrompt, { attempt, previousValidation }) => runGenerationWithProgress({
+                    attempt,
+                    previousValidation,
+                    provider: "openai",
+                    setProgress: (message) => updateStudent(student.id, "progress", message),
+                    run: () => fetchOpenAICompletion({ prompt: nextPrompt, apiKey: appliedOpenAIKey, targetChars }),
+                }),
             });
-            const data = await res.json();
 
-            if (data.error) throw new Error(data.error);
-
-            // 글자수 초과시 후처리: 완전한 문장으로 자르기
-            let result = data.result;
-            result = truncateToCompleteSentence(result, targetChars);
-            if (data.result && result.length < data.result.length) {
-                console.log(`[글자수 조정] 원본: ${data.result.length}자 → ${result.length}자 (완전한 문장으로)`);
+            if (generationResult.repaired) {
+                console.log(`[내부 검증] 학생 ${student.id}: ${generationResult.attempts}회 시도 후 규칙 보정`);
+            }
+            if (!generationResult.validation.ok) {
+                console.warn(`[내부 검증] 학생 ${student.id}: 최종 결과 일부 규칙 확인 필요`, generationResult.validation.issues);
             }
 
+            const result = generationResult.text;
             updateStudent(student.id, "result", result);
             updateStudent(student.id, "status", "success");
+            updateStudent(student.id, "progress", "");
         } catch (error) {
             console.error(error);
             updateStudent(student.id, "status", "error");
+            updateStudent(student.id, "progress", "");
             alert(`학생 ${student.id} 생성 실패: ${error.message}`);
         }
     };
@@ -377,7 +411,7 @@ ${lengthInstruction}
                                     onChange={(e) => setTextLength(e.target.value)}
                                     className="form-select"
                                 >
-                                    <option value="1500">1500byte (약 500자)</option>
+                                    <option value="1500">1500byte (약 490자)</option>
                                     <option value="1000">1000byte (약 333자)</option>
                                     <option value="600">600byte (약 200자)</option>
                                     <option value="manual">직접 입력</option>
@@ -408,21 +442,30 @@ ${lengthInstruction}
                             />
                         </div>
 
-                        <div className="flex gap-4 flex-col sm:flex-row mt-auto">
+                        <OpenAIKeyControl
+                            openAIKeyInput={openAIKeyInput}
+                            setOpenAIKeyInput={setOpenAIKeyInput}
+                            applyOpenAIKey={applyOpenAIKey}
+                            clearOpenAIKey={clearOpenAIKey}
+                            isOpenAIKeyApplied={isOpenAIKeyApplied}
+                            maskedOpenAIKey={maskedOpenAIKey}
+                        />
+
+                        <div className="flex gap-2 mt-auto">
                             <button
                                 onClick={generateAll}
                                 disabled={isGenerating}
                                 className="btn-primary flex-1"
-                                style={{ padding: '12px', fontSize: '1.1rem' }}
+                                style={{ padding: '12px 24px', fontSize: '1.1rem' }}
                             >
                                 {isGenerating ? (
                                     <>
                                         <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>
-                                        생성 중...
+                                        {generationStatusText}
                                     </>
                                 ) : (
                                     <>
-                                        <Wand2 size={20} /> 전체 학생 AI 생성
+                                        <Wand2 size={20} /> AI 생성
                                     </>
                                 )}
                             </button>
@@ -431,7 +474,7 @@ ${lengthInstruction}
                                 className="btn-secondary"
                                 style={{ padding: '12px 24px', display: 'flex', alignItems: 'center', gap: '8px' }}
                             >
-                                <Download size={20} /> 엑셀 다운로드
+                                <Download size={20} /> 엑셀
                             </button>
                         </div>
                     </div>
@@ -535,10 +578,50 @@ ${lengthInstruction}
                                         {student.status === "loading" && (
                                             <div className="loading-overlay">
                                                 <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mb-2"></div>
-                                                <span style={{ fontSize: '0.9rem', fontWeight: 500, color: '#2563eb' }}>생성 중...</span>
+                                                <span style={{ fontSize: '0.9rem', fontWeight: 500, color: '#2563eb' }}>
+                                                    {student.progress || generationStatusText}
+                                                </span>
                                             </div>
                                         )}
                                     </div>
+
+                                    {/* 결과 정보 및 복사 버튼 */}
+                                    {student.result && (
+                                        <div className="result-action-row">
+                                            <span className="result-byte-count">
+                                                {getUtf8ByteLength(student.result).toLocaleString()} byte
+                                            </span>
+                                            <button
+                                                onClick={() => {
+                                                    const copyText = (text) => {
+                                                        if (navigator.clipboard && window.isSecureContext) {
+                                                            navigator.clipboard.writeText(text);
+                                                        } else {
+                                                            const textarea = document.createElement('textarea');
+                                                            textarea.value = text;
+                                                            textarea.style.position = 'fixed';
+                                                            textarea.style.opacity = '0';
+                                                            document.body.appendChild(textarea);
+                                                            textarea.select();
+                                                            document.execCommand('copy');
+                                                            document.body.removeChild(textarea);
+                                                        }
+                                                    };
+                                                    copyText(student.result);
+                                                    setCopiedId(student.id);
+                                                    setTimeout(() => setCopiedId(null), 1500);
+                                                }}
+                                                className={`btn-copy ${copiedId === student.id ? 'copied' : ''}`}
+                                                title="클립보드에 복사"
+                                            >
+                                                {copiedId === student.id ? (
+                                                    <><Check size={14} /> 복사됨!</>
+                                                ) : (
+                                                    <><Copy size={14} /> 복사</>
+                                                )}
+                                            </button>
+                                        </div>
+                                    )}
                                 </div>
                             </div>
                         </div>

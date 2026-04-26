@@ -1,10 +1,17 @@
 "use client";
 
 import { useState, useRef } from "react";
-import { Trash2, Download, Wand2, Users, UserX, Copy } from "lucide-react";
+import { Trash2, Download, Wand2, Users, UserX, Copy, Check } from "lucide-react";
 import * as XLSX from "xlsx";
 import { writeExcel } from "../../utils/excel";
-import { cleanMetaInfo, truncateToCompleteSentence, getCharacterGuideline, getPromptCharLimit } from "../../utils/textProcessor";
+import { getCharacterGuideline, getMinimumTargetBytes, getUtf8ByteLength, normalizeTargetBytes, normalizeTargetChars } from "../../utils/textProcessor";
+import { fetchOpenAICompletion } from "../../utils/openAIFetch";
+import { useOpenAIKey } from "../../utils/openAIKey";
+import OpenAIKeyControl from "../../components/OpenAIKeyControl";
+import { generateWithSilentValidation } from "../../utils/generationHarness";
+import { runGenerationWithProgress } from "../../utils/generationProgress";
+import { fetchSearchContext } from "../../utils/searchContextFetch";
+import { getBehaviorHighSchoolQualityGuidance } from "../../utils/recordQualityGuidance";
 
 export default function BehaviorPage() {
     // State
@@ -13,11 +20,25 @@ export default function BehaviorPage() {
     const [manualCountValue, setManualCountValue] = useState("");
 
     // Students state now includes 'observation' instead of 'grade'
-    const [students, setStudents] = useState([{ id: 1, name: "", observation: "", result: "", status: "idle" }]);
+    const [students, setStudents] = useState([{ id: 1, name: "", observation: "", result: "", status: "idle", progress: "" }]);
+    const [schoolLevel, setSchoolLevel] = useState("middle");
+    const [additionalInstructions, setAdditionalInstructions] = useState("");
     const [textLength, setTextLength] = useState("1500");
     const [manualLength, setManualLength] = useState("");
     const [isGenerating, setIsGenerating] = useState(false);
+    const [useWebSearchContext, setUseWebSearchContext] = useState(false);
+    const [copiedId, setCopiedId] = useState(null);
     const fileInputRef = useRef(null);
+    const {
+        openAIKeyInput,
+        setOpenAIKeyInput,
+        appliedOpenAIKey,
+        applyOpenAIKey,
+        clearOpenAIKey,
+        isOpenAIKeyApplied,
+        maskedOpenAIKey,
+    } = useOpenAIKey();
+    const generationStatusText = appliedOpenAIKey ? "OpenAI API key를 사용하여 생성 중..." : "OpenAI API key 적용 필요";
 
     // Auto-resize textarea
     const adjustTextareaHeight = (element) => {
@@ -32,7 +53,7 @@ export default function BehaviorPage() {
         const newStudents = [...students];
         if (count > newStudents.length) {
             for (let i = newStudents.length + 1; i <= count; i++) {
-                newStudents.push({ id: i, name: "", observation: "", result: "", status: "idle" });
+                newStudents.push({ id: i, name: "", observation: "", result: "", status: "idle", progress: "" });
             }
         } else {
             newStudents.splice(count);
@@ -168,94 +189,130 @@ export default function BehaviorPage() {
     };
 
 
-    // cleanMetaInfo, truncateToCompleteSentence는 textProcessor에서 import됨
+    // 생성 결과 검증과 후처리는 generationHarness에서 내부 처리됨
 
-    const generatePrompt = (student, targetChars) => {
+    const generatePrompt = (student, targetChars, searchContext = "") => {
         let minChar, maxChar;
         if (targetChars === 200) {
             minChar = 150; maxChar = 200;
-        } else if (targetChars === 500) {
-            minChar = 400; maxChar = 500;
+        } else if (targetChars === 490) {
+            minChar = 400; maxChar = 490;
         } else {
             minChar = Math.floor(targetChars * 0.8);
             maxChar = targetChars;
         }
 
         // 글자수 지침은 공통 유틸에서 생성
-        const lengthInstruction = getCharacterGuideline(targetChars);
+        const targetBytes = normalizeTargetBytes(textLength, manualLength);
+        const lengthInstruction = getCharacterGuideline(targetChars, targetBytes, getMinimumTargetBytes(targetBytes));
         const observationText = student.observation ? `학생 행동 관찰 내용: ${student.observation}` : "학생 행동 관찰 내용: 일반적인 모범 학생의 특성 (구체적인 입력 없음)";
+        const searchContextText = searchContext.trim()
+            ? `\n\n[행동 관찰 내용 기반 웹 검색 보강 자료]\n${searchContext}\n(위 검색 보강 자료는 입력된 행동 관찰 내용을 정확히 이해하기 위한 배경 자료입니다. 학생에게 실제로 입력된 관찰 내용을 우선하고, 검색 자료는 인성 요소·공동체 역량·지도 관점 이해를 보강하는 데에만 사용하세요.)`
+            : "";
+        const highSchoolQualityGuidance = getBehaviorHighSchoolQualityGuidance(schoolLevel);
+        const highSchoolQualityText = highSchoolQualityGuidance
+            ? `\n\n${highSchoolQualityGuidance}`
+            : "";
 
-        return `<입력 정보>
-${observationText}
-</입력 정보>
+        return `당신은 학교생활기록부 행동특성 및 종합의견(행발)을 작성하는 교사입니다.
+교사가 입력한 관찰 내용을 바탕으로, 학생의 인성, 잠재력, 공동체 역량이 드러나는 행발 본문을 작성하세요.
+
+<입력 정보>
+${observationText}${searchContextText}
+${highSchoolQualityText}
 
 <작성 규칙>
-1. 주어 없이 활동이나 특성부터 바로 서술을 시작하라 (활동 자체를 주어로 사용 가능)
-2. 명사형 종결어미(~함, ~임, ~음)를 사용하라
-3. 모든 문장은 반드시 마침표(.)로 끝내라
-4. 배려, 나눔, 협력, 타인 존중, 갈등 관리, 관계 지향성, 규칙 준수 등 인성 요소와 리더십, 자기주도성 등 잠재력을 중심으로 서술하라
-5. 추상적 칭찬 대신, 구체적 행동 사례나 에피소드를 통해 학생의 특성을 드러내라
-6. 일년 동안의 긍정적 변화와 성장의 모습을 보여주라
-7. 부정적으로 보일 수 있는 특성은 긍정적 표현으로 전환하여 서술하라:
-   - 내성적 → 신중함, 사려 깊음, 차분함
-   - 소극적 → 신중하게 접근함, 관찰력이 뛰어남
-   - 느림 → 꼼꼼함, 세심함, 정확성을 추구함
-   - 고집이 셈 → 소신이 있음, 주관이 뚜렷함
-   - 산만함 → 다양한 관심사, 호기심이 많음
-   - 말이 적음 → 경청을 잘함, 신중하게 발언함
-8. '~하지만', '~에도 불구하고', '부족하다', '미흡하다' 등 부정적 뉘앙스 표현 대신, 성장 가능성과 발전 방향으로 서술하라
-9. 특정 성명, 기관명, 상호명은 기재하지 않는다
-10. 줄바꿈 없이 하나의 문단으로 작성하라
-</작성 규칙>
+1. '학생은', 'OO는' 등 주어를 사용하지 않고, 행동 특성과 에피소드부터 바로 서술
+2. 배려, 나눔, 협력, 타인 존중, 갈등 관리 등 인성 요소와 잠재력을 구체적 사례 중심으로 서술
+3. 단순 나열을 피하고, 일년 동안의 긍정적인 변화와 성장을 보여줄 것
+4. 부정적으로 보일 수 있는 특성도 반드시 긍정적이고 발전 가능성이 느껴지는 표현으로 전환 
+   (예: 내성적→신중함, 느림→꼼꼼함, 말수적음→경청함, 등)
+5. 어떠한 경우에도 부정적 표현("~하지만", "~임에도", "부족하다" 등)은 사용하지 않음
+6. 특정 성명, 기관명, 상호명 등은 기재하지 않음
+7. 줄바꿈 없이 하나의 문단으로 작성
+8. 명사형 종결어미(~함, ~임, ~음)와 함께 마침표(.)로 문장을 완결되게 끝냄
+9. '마지막으로', '끝으로', '마무리하며', '덧붙여', '추가로' 같은 마무리 접속어를 사용하지 않음
+
+${lengthInstruction}
 
 <출력 형식>
-${lengthInstruction}
-오직 행발 본문 텍스트만 출력하라. 글자수, 분석 내용, 메타 정보 등 부가 설명은 일체 포함하지 않는다.
-</출력 형식>
+- 오직 행발 본문 텍스트만 출력
+- 글자수 표기, 분석, 검증 포인트, 부가 설명 등 메타 정보는 출력하지 않음
 
 <좋은 예시>
-"학급의 궂은일을 도맡아 하며 배려와 나눔의 가치를 실천하는 데 모범을 보임. 체육대회 연습 과정에서 의견 조율 능력이 돋보이며 친구들 사이의 갈등을 원만하게 중재하는 모습을 보임."
-</좋은 예시>
+"학급의 궂은일을 도맡아 하며 친구들이 배려와 나눔의 가치를 실천하는 데 모범을 보임. 체육대회 연습 과정에서 의견 충돌이 있는 친구들 사이의 입장을 조율하고 화해를 이끄는 갈등 관리 능력이 뛰어남. 평소 신중하게 접근하고 꼼꼼하게 과제를 수행하여 완성도 높은 결과를 도출하며, 스스로 학습 목표를 세우고 꾸준히 노력하는 자기주도성이 돋보임."
     `;
     };
 
     const generateForStudent = async (student) => {
+        if (!appliedOpenAIKey) {
+            alert("OpenAI API key를 먼저 적용해주세요.");
+            return;
+        }
+
         // For behavior, we allow generation even if observation is empty (using default prompt)
         // But let's require at least some input if the user wants specific results.
         // However, to be consistent with "AI generation", we can generate generic good behavior if empty.
         // Let's stick to the prompt logic which handles empty observation.
 
-        let targetChars = 500;
-        if (textLength === "1500") targetChars = 500;
-        else if (textLength === "1000") targetChars = 330;
-        else if (textLength === "600") targetChars = 200;
-        else if (textLength === "manual") targetChars = parseInt(manualLength) || 500;
-
-        const prompt = generatePrompt(student, targetChars);
+        const targetBytes = normalizeTargetBytes(textLength, manualLength);
+        const targetChars = normalizeTargetChars(textLength, manualLength);
+        const minTargetBytes = getMinimumTargetBytes(targetBytes);
 
         try {
             updateStudent(student.id, "status", "loading");
-            const res = await fetch("/api/generate", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ prompt })
-            });
-            const data = await res.json();
-
-            if (data.error) throw new Error(data.error);
-
-            // 글자수 초과시 후처리: 완전한 문장으로 자르기
-            let result = data.result;
-            result = truncateToCompleteSentence(result, targetChars);
-            if (data.result && result.length < data.result.length) {
-                console.log(`[글자수 조정] 원본: ${data.result.length}자 → ${result.length}자 (완전한 문장으로)`);
+            updateStudent(student.id, "progress", "생성 준비 중...");
+            let searchContext = "";
+            if (useWebSearchContext && student.observation?.trim()) {
+                try {
+                    updateStudent(student.id, "progress", "웹 검색 보강 중...");
+                    const searchResult = await fetchSearchContext({
+                        subjectName: "행동특성 및 종합의견",
+                        commonActivities: [],
+                        individualActivity: student.observation,
+                    });
+                    searchContext = searchResult.context || "";
+                    if (searchResult.query) {
+                        console.log(`[웹 검색 보강] 학생 ${student.id}: ${searchResult.query}`);
+                    }
+                } catch (searchError) {
+                    console.warn(`[웹 검색 보강 실패] 학생 ${student.id}: ${searchError.message}`);
+                }
             }
 
+            const prompt = generatePrompt(student, targetChars, searchContext);
+            const generationResult = await generateWithSilentValidation({
+                prompt,
+                maxTargetBytes: targetBytes,
+                minTargetBytes,
+                targetChars,
+                mode: "record",
+                forbiddenTerms: [student.name],
+                maxRepairAttempts: 1,
+                generateOnce: (nextPrompt, { attempt, previousValidation }) => runGenerationWithProgress({
+                    attempt,
+                    previousValidation,
+                    provider: "openai",
+                    setProgress: (message) => updateStudent(student.id, "progress", message),
+                    run: () => fetchOpenAICompletion({ prompt: nextPrompt, additionalInstructions, apiKey: appliedOpenAIKey, targetChars }),
+                }),
+            });
+
+            if (generationResult.repaired) {
+                console.log(`[내부 검증] 학생 ${student.id}: ${generationResult.attempts}회 시도 후 규칙 보정`);
+            }
+            if (!generationResult.validation.ok) {
+                console.warn(`[내부 검증] 학생 ${student.id}: 최종 결과 일부 규칙 확인 필요`, generationResult.validation.issues);
+            }
+
+            const result = generationResult.text;
             updateStudent(student.id, "result", result);
             updateStudent(student.id, "status", "success");
+            updateStudent(student.id, "progress", "");
         } catch (error) {
             console.error(error);
             updateStudent(student.id, "status", "error");
+            updateStudent(student.id, "progress", "");
             alert(`학생 ${student.id} 생성 실패: ${error.message}`);
         }
     };
@@ -318,6 +375,19 @@ ${lengthInstruction}
                         <h2>학생 설정</h2>
                     </div>
                     <div className="flex flex-col gap-6">
+                        <div className="form-group">
+                            <label className="form-label">학교급</label>
+                            <select
+                                value={schoolLevel}
+                                onChange={(e) => setSchoolLevel(e.target.value)}
+                                className="form-select"
+                            >
+                                <option value="elementary">초등학교</option>
+                                <option value="middle">중학교</option>
+                                <option value="high">고등학교</option>
+                            </select>
+                        </div>
+
                         <div className="form-group">
                             <label className="form-label">학생 수</label>
                             {!isManualInput ? (
@@ -396,7 +466,7 @@ ${lengthInstruction}
                                 onChange={(e) => setTextLength(e.target.value)}
                                 className="form-select"
                             >
-                                <option value="1500">1500byte (한글 약 500자)</option>
+                                <option value="1500">1500byte (한글 약 490자)</option>
                                 <option value="1000">1000byte (한글 약 333자)</option>
                                 <option value="600">600byte (한글 약 200자)</option>
                                 <option value="manual">직접 입력</option>
@@ -412,21 +482,82 @@ ${lengthInstruction}
                             )}
                         </div>
 
-                        <div className="flex gap-4 flex-col sm:flex-row">
+                        <div className="form-group" style={{ marginBottom: 0 }}>
+                            <label className="form-label" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                <span style={{ color: '#dc2626', fontWeight: 'bold' }}>⚠</span>
+                                추가 지침 사항 (선택)
+                            </label>
+                            <textarea
+                                value={additionalInstructions}
+                                onChange={(e) => setAdditionalInstructions(e.target.value)}
+                                placeholder="예: 공동체 역량과 배려 행동을 중심으로 작성해 주세요."
+                                className="form-textarea"
+                                style={{
+                                    minHeight: '70px',
+                                    fontSize: '0.9rem',
+                                    resize: 'vertical',
+                                    borderColor: '#fecaca',
+                                    backgroundColor: '#fef2f2'
+                                }}
+                            />
+                            <p style={{ fontSize: '0.75rem', color: '#6b7280', marginTop: '4px' }}>
+                                위 지침은 AI가 최우선으로 엄격히 준수합니다.
+                            </p>
+                        </div>
+
+                        <label
+                            className="form-label"
+                            style={{
+                                display: 'flex',
+                                alignItems: 'flex-start',
+                                gap: '10px',
+                                padding: '12px',
+                                border: '1px solid #fed7aa',
+                                borderRadius: '8px',
+                                backgroundColor: '#fff7ed',
+                                cursor: 'pointer',
+                                lineHeight: 1.45
+                            }}
+                        >
+                            <input
+                                type="checkbox"
+                                checked={useWebSearchContext}
+                                onChange={(e) => setUseWebSearchContext(e.target.checked)}
+                                style={{ marginTop: '3px', flexShrink: 0 }}
+                            />
+                            <span>
+                                <strong>행동 관찰 내용 웹 검색 보강</strong>
+                                <br />
+                                <span style={{ color: '#6b7280', fontSize: '0.8rem', fontWeight: 400 }}>
+                                    학생별 행동 관찰 내용을 검색해 인성 요소와 공동체 역량 표현의 맥락을 보강합니다.
+                                </span>
+                            </span>
+                        </label>
+
+                        <OpenAIKeyControl
+                            openAIKeyInput={openAIKeyInput}
+                            setOpenAIKeyInput={setOpenAIKeyInput}
+                            applyOpenAIKey={applyOpenAIKey}
+                            clearOpenAIKey={clearOpenAIKey}
+                            isOpenAIKeyApplied={isOpenAIKeyApplied}
+                            maskedOpenAIKey={maskedOpenAIKey}
+                        />
+
+                        <div className="flex gap-2">
                             <button
                                 onClick={generateAll}
                                 disabled={isGenerating}
                                 className="btn-primary flex-1"
-                                style={{ padding: '16px', fontSize: '1.1rem' }}
+                                style={{ padding: '16px 24px', fontSize: '1.1rem' }}
                             >
                                 {isGenerating ? (
                                     <>
                                         <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>
-                                        생성 중...
+                                        {generationStatusText}
                                     </>
                                 ) : (
                                     <>
-                                        <Wand2 size={20} /> 전체 학생 AI 생성
+                                        <Wand2 size={20} /> AI 생성
                                     </>
                                 )}
                             </button>
@@ -435,7 +566,7 @@ ${lengthInstruction}
                                 className="btn-secondary"
                                 style={{ padding: '16px 24px', display: 'flex', alignItems: 'center', gap: '8px' }}
                             >
-                                <Download size={20} /> 엑셀 다운로드
+                                <Download size={20} /> 엑셀
                             </button>
                         </div>
                     </div>
@@ -552,17 +683,21 @@ ${lengthInstruction}
                                         {student.status === "loading" && (
                                             <div className="loading-overlay">
                                                 <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mb-2"></div>
-                                                <span style={{ fontSize: '0.9rem', fontWeight: 500, color: '#2563eb' }}>생성 중...</span>
+                                                <span style={{ fontSize: '0.9rem', fontWeight: 500, color: '#2563eb' }}>
+                                                    {student.progress || generationStatusText}
+                                                </span>
                                             </div>
                                         )}
                                     </div>
 
-                                    {/* 복사 버튼 */}
+                                    {/* 결과 정보 및 복사 버튼 */}
                                     {student.result && (
-                                        <div className="flex justify-end mt-2">
+                                        <div className="result-action-row">
+                                            <span className="result-byte-count">
+                                                {getUtf8ByteLength(student.result).toLocaleString()} byte
+                                            </span>
                                             <button
                                                 onClick={() => {
-                                                    // Clipboard API fallback for HTTP
                                                     const copyText = (text) => {
                                                         if (navigator.clipboard && window.isSecureContext) {
                                                             navigator.clipboard.writeText(text);
@@ -578,29 +713,17 @@ ${lengthInstruction}
                                                         }
                                                     };
                                                     copyText(student.result);
-                                                    const btn = document.getElementById(`copy-btn-behavior-${student.id}`);
-                                                    if (btn) {
-                                                        btn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg><span>복사됨!</span>';
-                                                        setTimeout(() => {
-                                                            btn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"></rect><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"></path></svg><span>복사</span>';
-                                                        }, 1500);
-                                                    }
+                                                    setCopiedId(student.id);
+                                                    setTimeout(() => setCopiedId(null), 1500);
                                                 }}
-                                                id={`copy-btn-behavior-${student.id}`}
-                                                className="btn-secondary"
-                                                style={{
-                                                    padding: '4px 10px',
-                                                    fontSize: '0.75rem',
-                                                    display: 'flex',
-                                                    alignItems: 'center',
-                                                    gap: '4px',
-                                                    color: '#6b7280',
-                                                    borderColor: '#e5e7eb'
-                                                }}
+                                                className={`btn-copy ${copiedId === student.id ? 'copied' : ''}`}
                                                 title="클립보드에 복사"
                                             >
-                                                <Copy size={14} />
-                                                <span>복사</span>
+                                                {copiedId === student.id ? (
+                                                    <><Check size={14} /> 복사됨!</>
+                                                ) : (
+                                                    <><Copy size={14} /> 복사</>
+                                                )}
                                             </button>
                                         </div>
                                     )}

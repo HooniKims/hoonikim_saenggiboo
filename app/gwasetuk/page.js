@@ -4,7 +4,47 @@ import { useState, useRef, useEffect } from "react";
 import { Plus, Trash2, Upload, Download, Wand2, FileSpreadsheet, Users, UserX, Copy, Check } from "lucide-react";
 import * as XLSX from "xlsx";
 import { writeExcel } from "../../utils/excel";
-import { cleanMetaInfo, truncateToCompleteSentence, getCharacterGuideline, getPromptCharLimit } from "../../utils/textProcessor";
+import { getCharacterGuideline, getMinimumTargetBytes, getUtf8ByteLength, normalizeTargetBytes, normalizeTargetChars } from "../../utils/textProcessor";
+import { fetchOpenAICompletion } from "../../utils/openAIFetch";
+import { useOpenAIKey } from "../../utils/openAIKey";
+import OpenAIKeyControl from "../../components/OpenAIKeyControl";
+import { generateWithSilentValidation } from "../../utils/generationHarness";
+import { runGenerationWithProgress } from "../../utils/generationProgress";
+import { fetchSearchContext } from "../../utils/searchContextFetch";
+
+const GRADE_OPTIONS = ["A", "B", "C"];
+
+const normalizeActivityGrades = (grades = [], activityCount = 1, fallbackGrade = "A") => {
+    const safeCount = Math.max(1, activityCount);
+    const safeFallback = GRADE_OPTIONS.includes(fallbackGrade) ? fallbackGrade : "A";
+    return Array.from({ length: safeCount }, (_, index) => {
+        const grade = Array.isArray(grades) ? grades[index] : undefined;
+        return GRADE_OPTIONS.includes(grade) ? grade : safeFallback;
+    });
+};
+
+const areSameGrades = (left = [], right = []) => (
+    left.length === right.length && left.every((grade, index) => grade === right[index])
+);
+
+const createStudent = (id, values = {}, activityCount = 1) => {
+    const fallbackGrade = GRADE_OPTIONS.includes(values.grade) ? values.grade : "A";
+    const activityGrades = normalizeActivityGrades(values.activityGrades, activityCount, fallbackGrade);
+    return {
+        id,
+        name: "",
+        grade: fallbackGrade,
+        activityGrades,
+        individualActivity: "",
+        result: "",
+        status: "idle",
+        progress: "",
+        ...values,
+        id,
+        grade: fallbackGrade,
+        activityGrades,
+    };
+};
 
 export default function GwasetukPage() {
     // State
@@ -15,15 +55,42 @@ export default function GwasetukPage() {
     const [subjectName, setSubjectName] = useState("");
     const [schoolLevel, setSchoolLevel] = useState("middle"); // elementary, middle, high
 
-    const [students, setStudents] = useState([{ id: 1, name: "", grade: "A", individualActivity: "", result: "", status: "idle" }]);
+    const [students, setStudents] = useState(() => [createStudent(1)]);
     const [activities, setActivities] = useState([""]);
     const [additionalInstructions, setAdditionalInstructions] = useState(""); // 추가 지침 사항
     const [textLength, setTextLength] = useState("1500"); // 1500, 1000, 600, manual
     const [manualLength, setManualLength] = useState("");
     const [isGenerating, setIsGenerating] = useState(false);
+    const [useWebSearchContext, setUseWebSearchContext] = useState(false);
+    const [copiedId, setCopiedId] = useState(null);
     const fileInputRef = useRef(null);
     const activityInputRefs = useRef([]);
     const prevActivitiesLength = useRef(activities.length);
+    const {
+        openAIKeyInput,
+        setOpenAIKeyInput,
+        appliedOpenAIKey,
+        applyOpenAIKey,
+        clearOpenAIKey,
+        isOpenAIKeyApplied,
+        maskedOpenAIKey,
+    } = useOpenAIKey();
+    const generationStatusText = appliedOpenAIKey ? "OpenAI API key를 사용하여 생성 중..." : "OpenAI API key 적용 필요";
+
+    useEffect(() => {
+        setStudents(prevStudents => {
+            let changed = false;
+            const nextStudents = prevStudents.map(student => {
+                const activityGrades = normalizeActivityGrades(student.activityGrades, activities.length, student.grade);
+                if (areSameGrades(activityGrades, student.activityGrades || [])) {
+                    return student;
+                }
+                changed = true;
+                return { ...student, activityGrades };
+            });
+            return changed ? nextStudents : prevStudents;
+        });
+    }, [activities.length]);
 
     useEffect(() => {
         if (activities.length > prevActivitiesLength.current) {
@@ -46,12 +113,12 @@ export default function GwasetukPage() {
         const newStudents = [...students];
         if (count > newStudents.length) {
             for (let i = newStudents.length + 1; i <= count; i++) {
-                newStudents.push({ id: i, name: "", grade: "A", individualActivity: "", result: "", status: "idle" });
+                newStudents.push(createStudent(i, {}, activities.length));
             }
         } else {
             newStudents.splice(count);
         }
-        setStudents(newStudents);
+        setStudents(newStudents.map((student, index) => createStudent(index + 1, student, activities.length)));
         setStudentCount(count);
     };
 
@@ -129,7 +196,7 @@ export default function GwasetukPage() {
                     const activity = activityColIndex !== -1 ? row[activityColIndex] : "";
                     if (name && typeof name === 'string' && name.trim() !== "") {
                         const individualActivity = activity && typeof activity === 'string' ? activity.trim() : "";
-                        newStudents.push({ id: idCounter++, name: name.trim(), grade: "A", individualActivity, result: "", status: "idle" });
+                        newStudents.push(createStudent(idCounter++, { name: name.trim(), individualActivity }, activities.length));
                         if (individualActivity) {
                             console.log(`[엑셀 파싱] 학생: ${name.trim()} 활동내용: ${individualActivity}`);
                         }
@@ -144,7 +211,7 @@ export default function GwasetukPage() {
                         const val = row[j];
                         if (typeof val === 'string' && val.length > 1 && val.length < 10) {
                             if (val !== "성명" && val !== "이름") {
-                                newStudents.push({ id: idCounter++, name: val.trim(), grade: "A", individualActivity: "", result: "", status: "idle" });
+                                newStudents.push(createStudent(idCounter++, { name: val.trim() }, activities.length));
                                 break;
                             }
                         }
@@ -166,7 +233,17 @@ export default function GwasetukPage() {
     const addActivity = () => setActivities([...activities, ""]);
     const removeActivity = (index) => {
         const newActivities = activities.filter((_, i) => i !== index);
-        setActivities(newActivities.length ? newActivities : [""]);
+        const nextActivities = newActivities.length ? newActivities : [""];
+        setActivities(nextActivities);
+        setStudents(prevStudents => prevStudents.map(student => {
+            const currentGrades = normalizeActivityGrades(student.activityGrades, activities.length, student.grade);
+            const activityGrades = normalizeActivityGrades(
+                currentGrades.filter((_, gradeIndex) => gradeIndex !== index),
+                nextActivities.length,
+                student.grade
+            );
+            return { ...student, activityGrades };
+        }));
     };
     const updateActivity = (index, value) => {
         const newActivities = [...activities];
@@ -176,6 +253,24 @@ export default function GwasetukPage() {
 
     const updateStudent = (id, field, value) => {
         setStudents(prevStudents => prevStudents.map(s => s.id === id ? { ...s, [field]: value } : s));
+    };
+
+    const getActivityGrade = (student, activityIndex) => {
+        return normalizeActivityGrades(student.activityGrades, activities.length, student.grade)[activityIndex] || "A";
+    };
+
+    const updateStudentActivityGrade = (id, activityIndex, grade) => {
+        if (!GRADE_OPTIONS.includes(grade)) return;
+        setStudents(prevStudents => prevStudents.map(student => {
+            if (student.id !== id) return student;
+            const activityGrades = normalizeActivityGrades(student.activityGrades, activities.length, student.grade);
+            activityGrades[activityIndex] = grade;
+            return {
+                ...student,
+                grade: activityIndex === 0 ? grade : student.grade,
+                activityGrades,
+            };
+        }));
     };
 
     const removeStudent = (id) => {
@@ -188,43 +283,17 @@ export default function GwasetukPage() {
     };
 
 
-    // cleanMetaInfo, truncateToCompleteSentence는 textProcessor에서 import됨
+    // 생성 결과 검증과 후처리는 generationHarness에서 내부 처리됨
 
-    const generatePrompt = (student, selectedActivities, targetChars, individualActivity = "") => {
-        const gradePrompts = {
-            A: `// A등급 프롬프트\n등급: A (탁월함)\n이 학생은 학업 역량과 자기주도성이 매우 뛰어난 학생입니다.\n활동의 깊이와 수준이 높으며, 심화된 탐구와 융합적 사고가 잘 드러나도록 작성하세요.`,
-            B: `// B등급 프롬프트\n등급: B (우수함)\n이 학생은 주어진 과제를 성실히 수행하고 우수한 학업 역량을 보여주는 학생입니다.\nA등급보다는 최상급 표현(탁월함, 매우 뛰어남 등)을 줄이고, 과제를 잘 완수하고 성실히 참여했다는 점을 중심으로 작성하세요.`,
-            C: `// C등급 프롬프트\n등급: C (노력요함/발전가능성)\n학생의 활동 중 잘한 점과 다소 아쉬운 점을 균형 있게 서술하세요.\n참여도나 흥미를 보인 부분은 칭찬하고, 부족한 부분은 구체적인 조언이나 향후 노력 방향을 제시하는 방식으로 작성하세요.\n단순히 부족함을 지적하기보다, 긍정적인 변화 가능성을 열어두는 어조를 유지하세요.`
+    const generatePrompt = (student, selectedActivities, targetChars, individualActivity = "", searchContext = "") => {
+        const gradeDescriptions = {
+            A: "A(매우 잘함) - 활동의 깊이와 수준이 높으며, 주도적 탐구·심화 질문·융합적 사고·구체적 성과가 분명히 드러나게 서술",
+            B: "B(잘함) - 잘 해냄 기조를 유지하며 과제를 성실히 완수하고 핵심 개념을 이해한 모습, 참여 과정·자료 정리·협력 태도가 드러나게 서술하되 A 수준의 탁월함·돋보임·뛰어남으로 과장하지 않음",
+            C: "C(보통) - 부족한 부분이 있지만 노력하고 발전하려는 과정을 중심으로 쓰고, 기본 활동 참여·기초 이해·보완 의지·성장 가능성을 균형 있게 서술하되 비판하거나 비난하는 표현은 사용하지 않음"
         };
 
-        let minChar, maxChar;
-
-        if (targetChars === 200) {
-            // 600byte (approx 200 chars) specific logic
-            if (student.grade === 'A') { minChar = 190; maxChar = 200; }
-            else if (student.grade === 'B') { minChar = 170; maxChar = 189; }
-            else { minChar = 150; maxChar = 169; }
-        } else if (targetChars === 500) {
-            // 1500byte (approx 500 chars) specific logic
-            if (student.grade === 'A') { minChar = 480; maxChar = 500; }
-            else if (student.grade === 'B') { minChar = 430; maxChar = 479; }
-            else { minChar = 350; maxChar = 429; }
-        } else {
-            // Dynamic scaling for other lengths
-            if (student.grade === 'A') {
-                minChar = Math.floor(targetChars * 0.95);
-                maxChar = targetChars;
-            } else if (student.grade === 'B') {
-                minChar = Math.floor(targetChars * 0.85);
-                maxChar = Math.floor(targetChars * 0.94);
-            } else {
-                minChar = Math.floor(targetChars * 0.70);
-                maxChar = Math.floor(targetChars * 0.84);
-            }
-        }
-
-        // 글자수 지침은 공통 유틸에서 생성
-        const lengthInstruction = getCharacterGuideline(targetChars);
+        const targetBytes = normalizeTargetBytes(textLength, manualLength);
+        const lengthInstruction = getCharacterGuideline(targetChars, targetBytes, getMinimumTargetBytes(targetBytes));
 
         const schoolLevelMap = {
             elementary: "초등학생",
@@ -232,131 +301,201 @@ export default function GwasetukPage() {
             high: "고등학생"
         };
         const targetLevel = schoolLevelMap[schoolLevel] || "중학생";
-        const subjectContext = subjectName ? `과목/프로그램명: ${subjectName}` : "과목/프로그램명: 미지정 (일반적인 교과 또는 창체 활동으로 간주)";
+        // 과목명은 시스템 참고용으로만 전달 (출력에 절대 포함 금지)
+        const subjectContext = subjectName ? `[시스템 참고 - 출력에 절대 포함 금지] 과목: ${subjectName}` : "";
 
-        const activitiesText = selectedActivities.map(a => `- ${a}`).join("\n");
+        const useActivityGrades = schoolLevel !== "high";
+        const selectedActivityEntries = selectedActivities.map((entry, index) => {
+            if (typeof entry === "string") {
+                return {
+                    text: entry.trim(),
+                    grade: getActivityGrade(student, index),
+                    originalIndex: index,
+                };
+            }
+            const grade = GRADE_OPTIONS.includes(entry.grade) ? entry.grade : "A";
+            return {
+                text: String(entry.text || "").trim(),
+                grade,
+                originalIndex: Number.isInteger(entry.originalIndex) ? entry.originalIndex : index,
+            };
+        }).filter(entry => entry.text);
 
-        // 학생별 개별 활동 내용이 있으면 추가
+        const totalActivities = selectedActivityEntries.length;
+        const activitiesText = selectedActivityEntries.map((entry, i) => {
+            const gradeText = useActivityGrades ? ` [${entry.grade}]` : "";
+            const originalIndexText = entry.originalIndex !== i ? ` (원래 활동${entry.originalIndex + 1})` : "";
+            return `- 활동${i + 1}${gradeText}${originalIndexText}: ${entry.text}`;
+        }).join("\n");
+
+        const activityGradeInstruction = useActivityGrades
+            ? `\n[활동별 A/B/C 반영 기준]\n${selectedActivityEntries.map((entry, i) => `- 활동${i + 1}: ${entry.grade} - ${gradeDescriptions[entry.grade]}`).join("\n")}
+
+[등급별 표현 사전]
+- A 전용 권장 표현: 주도적으로 탐구함, 심화 질문을 제기함, 근거를 종합해 설명함, 새로운 관점으로 연결함, 구체적 성과를 보임, 높은 수준의 이해를 드러냄
+- B 전용 권장 표현: 과제를 안정적으로 수행함, 핵심 내용을 이해함, 맡은 역할을 충실히 수행함, 자료를 정리해 참여함, 활동 절차를 잘 따라가며 결과를 완성함, 잘 해냄 기조를 유지함
+- C 전용 권장 표현: 안내에 따라 활동에 참여함, 도움을 받아 기초적인 내용을 이해하려 노력함, 부족한 부분을 보완하려는 태도를 보임, 수행 과정에서 점차 개선하려는 모습이 드러남, 기본 과정을 익히려는 노력을 보임
+
+[등급 간 대비 규칙]
+- A 활동은 주도성, 심화성, 구체적 성과가 뚜렷하게 느껴지게 씀
+- B 활동에는 탁월함·돋보임·뛰어남·심화·주도적 같은 A급 표현을 쓰지 않음
+- C 활동에는 안내에 따라, 도움을 받아, 기초적인 내용을 중심으로 쓰되 못함·부족함이 큼·소극적·미흡함 같은 비판적 낙인 표현은 쓰지 않음
+- 같은 학생 안에서도 활동별 등급이 다르면 문장 강도와 성취 표현을 반드시 다르게 씀
+
+(각 활동은 해당 줄의 A/B/C 기준에 맞춰 깊이와 구체성을 조절하고, 다른 활동의 등급 기준을 섞어 적용하지 마세요. B와 C 활동은 A 수준의 최상위 표현으로 과장하지 마세요. C 활동은 부족한 부분이 있지만 노력하고 발전하려는 과정으로 서술하되 비판하거나 비난하는 표현은 사용하지 마세요. 선택한 A/B/C 등급 문구를 그대로 반복하지 말고 수행 깊이, 자율성, 구체성의 차이로 표현하세요.)`
+            : "";
+        const promptBasis = useActivityGrades ? "활동 내용과 활동별 A/B/C 기준" : "활동 내용";
+
         const individualActivityText = individualActivity.trim()
-            ? `\n\n[이 학생의 개별 활동 내용]\n${individualActivity}\n(위 개별 활동 내용과 공통 활동 내용을 연결하여 통합적으로 서술해 주세요. 예: '독서 감상문 작성' 활동과 '운수 좋은 날'이라는 개별 활동이 있으면, '운수 좋은 날'을 읽고 독서 감상문을 작성한 것으로 연결하여 서술)`
+            ? `\n\n[이 학생의 개별 활동 내용]\n${individualActivity}\n(위 개별 활동 내용은 공통 활동을 정확히 보강하기 위한 자료입니다. 활동 내용 목록의 순서를 유지하고, 개별 활동 내용을 첫 문장이나 첫 활동처럼 우선 배치하지 않음. 공통 활동 흐름 안에서 필요한 곳에 자연스럽게 통합해 주세요.)`
+            : "";
+        const searchContextText = searchContext.trim()
+            ? `\n\n[학생 개별 활동 내용 기반 웹 검색 보강 자료]\n${searchContext}\n(위 검색 보강 자료는 개별 활동을 정확히 이해하기 위한 배경 자료입니다. 학생이 실제로 입력한 활동과 공통 활동 내용을 우선하고, 검색 자료는 관련 개념·작품·연구·쟁점 이해를 보강하는 데에만 사용하세요.)`
             : "";
 
-        return `<입력 정보>
-대상 학교급: ${targetLevel}
+        return `당신은 학교생활기록부 과세특(과목별 세부능력 및 특기사항)을 작성하는 교사입니다.
+아래 ${totalActivities}개의 ${promptBasis}을 바탕으로 과세특 본문을 작성하세요.
+모든 활동을 빠짐없이 반영하되, 각 활동마다 다양한 표현과 구체적인 서술을 사용하세요.
+
+<입력 정보>
+대상: ${targetLevel}
 ${subjectContext}
-${gradePrompts[student.grade]}
-입력된 활동 내용:
-${activitiesText}${individualActivityText}
-</입력 정보>
+
+<활동 내용 - 총 ${totalActivities}개, 반드시 모두 반영>
+${activitiesText}${individualActivityText}${searchContextText}
+${activityGradeInstruction}
 
 <작성 규칙>
-1. 주어 없이 활동부터 바로 서술을 시작하라 (활동 자체를 주어로 사용 가능)
-2. 과목명이나 프로그램명을 언급하지 않고 바로 활동 서술로 시작하라
-3. 명사형 종결어미(~함, ~임, ~음)만 사용하라
-4. ${targetLevel} 수준에 맞는 어휘와 표현을 사용하라
-5. '이러한', '이를 통해', '종합적으로' 등 요약 표현 대신, 활동의 세부 과정이나 탐구 내용을 서술하라
-6. 마지막 문장도 구체적 활동 내용이나 학습 과정에 대한 서술로 끝내라
-7. 입력된 활동 내용만 활용하고, 입력에 없는 구체적 사건이나 결과를 추가로 서술하지 않는다
-8. 줄바꿈 없이 하나의 문단으로 작성하라
-</작성 규칙>
+1. '학생은', '이 학생은' 등 주어를 사용하지 않고, 활동 내용부터 바로 서술
+2. [절대금지] 과목명/프로그램명을 출력에 절대 포함하지 않음 (예: "국어시간에", "수학 수업에서", "과학 활동에서" 등 전부 금지). 바로 활동 서술로 시작
+3. [절대금지] 과거형 표현 금지 (~했음, ~였음, ~되었음, ~하였음, ~보였음). 반드시 현재형 명사 종결어미(~함, ~임, ~음, ~보임, ~드러남)만 사용
+4. ${targetLevel} 수준에 맞는 어휘 사용
+5. 줄바꿈 없이 하나의 문단으로 작성
+6. 입력된 ${totalActivities}개 활동 내용을 모두 빠짐없이 서술하고, 활동 내용 목록의 순서를 유지하며, 입력에 없는 사실은 추가하지 않음
+7. 마지막 문장도 반드시 구체적인 활동 내용이나 학습 과정 서술로 끝냄
+8. '이러한', '이를 통해', '이와 같이', '앞으로', '향후', '결과적으로', '종합적으로', '마지막으로', '끝으로', '마무리하며', '덧붙여', '추가로'로 시작하는 요약/정리/마무리 문장 대신, 활동의 세부 과정이나 탐구 내용을 추가 서술
+9. 문학작품을 언급할 때는 반드시 작품명(작가명) 형식으로만 표기함. 예: 소나기(황순원), 운수좋은 날(현진건). '황순원의 소나기', '현진건의 운수좋은 날'처럼 쓰지 않음
+10. 활동별 A/B/C 기준이 있으면 A는 심화·주도성, B는 잘 해냄 기조의 성실한 수행·핵심 이해, C는 부족한 부분이 있지만 노력하고 발전하려는 과정 중심으로 표현 강도를 구분함
+
+${lengthInstruction}
 
 <출력 형식>
-${lengthInstruction}
-오직 세특 본문 텍스트만 출력하라. 글자수, 분석 내용, 메타 정보 등 부가 설명은 일체 포함하지 않는다.
-</출력 형식>
+- 오직 세특 본문 텍스트만 출력
+- 글자수 표기, 분석, 검증 포인트, 부가 설명 등 메타 정보는 출력하지 않음
 
 <좋은 예시>
-"교내 토론 대회에서 '인공지능의 윤리'를 주제로 찬성 측 토론자로 참여하여 다양한 근거 자료를 조사하고 논리적으로 주장을 전개함. 특히 반론 과정에서 상대 측의 논거를 정확히 파악하고 재반박하는 능력이 돋보임."
-</좋은 예시>
+"토론 활동에서 '인공지능의 윤리'를 주제로 찬성 측 토론자로 참여하여 다양한 근거 자료를 조사하고 논리적으로 주장을 전개함. 특히 반론 과정에서 상대 측의 논거를 정확히 파악하고 재반박하는 능력이 돋보이며, 팀원들과 역할을 분담하여 자료 수집과 발표 준비를 체계적으로 진행함."
     `;
     };
 
-    // 학생별 개별 활동과 공통 활동 간의 관련성 점수 계산
-    const calculateRelevanceScore = (commonActivity, individualActivity) => {
-        if (!individualActivity || !commonActivity) return 0;
-        const commonWords = commonActivity.toLowerCase().split(/\s+/);
-        const individualWords = individualActivity.toLowerCase().split(/\s+/);
-        let score = 0;
-        for (const word of commonWords) {
-            if (word.length > 1 && individualWords.some(iw => iw.includes(word) || word.includes(iw))) {
-                score += 1;
-            }
+    // Fisher-Yates 셔플 알고리즘 (강력한 랜덤)
+    const shuffleArray = (arr) => {
+        const shuffled = [...arr];
+        for (let i = shuffled.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
         }
-        return score;
+        return shuffled;
     };
 
     const generateForStudent = async (student) => {
-        const validActivities = activities.filter(a => a.trim() !== "");
-        if (validActivities.length === 0 && !student.individualActivity?.trim()) {
+        if (!appliedOpenAIKey) {
+            alert("OpenAI API key를 먼저 적용해주세요.");
+            return;
+        }
+
+        const validActivityEntries = activities
+            .map((activity, originalIndex) => ({
+                text: activity.trim(),
+                grade: getActivityGrade(student, originalIndex),
+                originalIndex,
+            }))
+            .filter(entry => entry.text !== "");
+
+        if (validActivityEntries.length === 0 && !student.individualActivity?.trim()) {
             alert("활동 내용을 입력해주세요.");
             return;
         }
 
-        // Calculate Target Chars
-        let targetChars = 500;
-        if (textLength === "1500") targetChars = 500;
-        else if (textLength === "1000") targetChars = 330;
-        else if (textLength === "600") targetChars = 200;
-        else if (textLength === "manual") targetChars = parseInt(manualLength) || 500;
+        const targetBytes = normalizeTargetBytes(textLength, manualLength);
+        const targetChars = normalizeTargetChars(textLength, manualLength);
+        const minTargetBytes = getMinimumTargetBytes(targetBytes);
 
-        let selectedActivities = [...validActivities];
+        // 개인별 활동 내용이 있어도 공통 활동 순서는 항상 Fisher-Yates 셔플로 랜덤화
+        let selectedActivityEntries = shuffleArray(validActivityEntries);
 
-        // 학생별 개별 활동이 있으면 관련성 높은 활동 우선 선택
-        if (student.individualActivity?.trim() && validActivities.length > 0) {
-            // 관련성 점수로 정렬 (높은 점수 우선)
-            selectedActivities = [...validActivities].sort((a, b) => {
-                const scoreA = calculateRelevanceScore(a, student.individualActivity);
-                const scoreB = calculateRelevanceScore(b, student.individualActivity);
-                if (scoreB !== scoreA) return scoreB - scoreA;
-                return Math.random() - 0.5; // 동점일 경우 랜덤
-            });
-        } else if (additionalInstructions && (additionalInstructions.includes('랜덤') || additionalInstructions.includes('무작위'))) {
-            // 추가 지침에 '랜덤' 또는 '무작위' 키워드가 있으면 활동 셔플
-            selectedActivities = [...validActivities].sort(() => Math.random() - 0.5);
-        }
-        // 그 외에는 원래 순서 유지
-
-        // Activity Selection Logic based on Target Chars - 강화된 로직
+        // Activity Selection Logic based on Target Chars
         if (targetChars < 80) {
-            // 매우 짧으면 1개만 선택
-            selectedActivities = selectedActivities.slice(0, 1);
+            selectedActivityEntries = selectedActivityEntries.slice(0, 1);
         } else if (targetChars <= 150) {
-            // 150자 이하: 최대 2개
-            selectedActivities = selectedActivities.slice(0, Math.min(2, selectedActivities.length));
+            selectedActivityEntries = selectedActivityEntries.slice(0, Math.min(2, selectedActivityEntries.length));
         } else if (targetChars <= 250) {
-            // 250자 이하: 최대 3개
-            selectedActivities = selectedActivities.slice(0, Math.min(3, selectedActivities.length));
+            selectedActivityEntries = selectedActivityEntries.slice(0, Math.min(3, selectedActivityEntries.length));
         } else if (targetChars <= 350) {
-            // 350자 이하 (1000byte): 최대 4개
-            selectedActivities = selectedActivities.slice(0, Math.min(4, selectedActivities.length));
+            selectedActivityEntries = selectedActivityEntries.slice(0, Math.min(4, selectedActivityEntries.length));
         }
         // 350자 초과: 모든 활동 사용
 
-        const prompt = generatePrompt(student, selectedActivities, targetChars, student.individualActivity || "");
-
         try {
             updateStudent(student.id, "status", "loading");
-            const res = await fetch("/api/generate", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ prompt, additionalInstructions })
-            });
-            const data = await res.json();
-
-            if (data.error) throw new Error(data.error);
-
-            // 글자수 초과시 후처리: 완전한 문장으로 자르기
-            let result = data.result;
-            result = truncateToCompleteSentence(result, targetChars);
-            if (data.result && result.length < data.result.length) {
-                console.log(`[글자수 조정] 원본: ${data.result.length}자 → ${result.length}자 (완전한 문장으로)`);
+            updateStudent(student.id, "progress", "생성 준비 중...");
+            let searchContext = "";
+            if (useWebSearchContext && student.individualActivity?.trim()) {
+                try {
+                    updateStudent(student.id, "progress", "웹 검색 보강 중...");
+                    const searchResult = await fetchSearchContext({
+                        subjectName,
+                        commonActivities: selectedActivityEntries.map(entry => entry.text),
+                        individualActivity: student.individualActivity,
+                    });
+                    searchContext = searchResult.context || "";
+                    if (searchResult.query) {
+                        console.log(`[웹 검색 보강] 학생 ${student.id}: ${searchResult.query}`);
+                    }
+                } catch (searchError) {
+                    console.warn(`[웹 검색 보강 실패] 학생 ${student.id}: ${searchError.message}`);
+                }
             }
 
+            const prompt = generatePrompt(
+                student,
+                selectedActivityEntries,
+                targetChars,
+                student.individualActivity || "",
+                searchContext
+            );
+            const generationResult = await generateWithSilentValidation({
+                prompt,
+                maxTargetBytes: targetBytes,
+                minTargetBytes,
+                targetChars,
+                mode: "record",
+                forbiddenTerms: [subjectName, student.name],
+                maxRepairAttempts: 1,
+                generateOnce: (nextPrompt, { attempt, previousValidation }) => runGenerationWithProgress({
+                    attempt,
+                    previousValidation,
+                    provider: "openai",
+                    setProgress: (message) => updateStudent(student.id, "progress", message),
+                    run: () => fetchOpenAICompletion({ prompt: nextPrompt, additionalInstructions, apiKey: appliedOpenAIKey, targetChars }),
+                }),
+            });
+
+            if (generationResult.repaired) {
+                console.log(`[내부 검증] 학생 ${student.id}: ${generationResult.attempts}회 시도 후 규칙 보정`);
+            }
+            if (!generationResult.validation.ok) {
+                console.warn(`[내부 검증] 학생 ${student.id}: 최종 결과 일부 규칙 확인 필요`, generationResult.validation.issues);
+            }
+
+            const result = generationResult.text;
             updateStudent(student.id, "result", result);
             updateStudent(student.id, "status", "success");
+            updateStudent(student.id, "progress", "");
         } catch (error) {
             console.error(error);
             updateStudent(student.id, "status", "error");
+            updateStudent(student.id, "progress", "");
             alert(`학생 ${student.id} 생성 실패: ${error.message}`);
         }
     };
@@ -390,12 +529,17 @@ ${lengthInstruction}
             return;
         }
 
-        const data = students.map(s => ({
-            "번호": s.id,
-            "성명": s.name,
-            "성취도": s.grade,
-            "세부능력 및 특기사항": s.result
-        }));
+        const data = students.map(s => {
+            const row = {
+                "번호": s.id,
+                "성명": s.name,
+            };
+            if (schoolLevel !== "high") {
+                row["활동별 성취도"] = activities.map((_, index) => `활동${index + 1}:${getActivityGrade(s, index)}`).join(", ");
+            }
+            row["세부능력 및 특기사항"] = s.result;
+            return row;
+        });
         writeExcel(data, "과세특_결과.xlsx");
     };
 
@@ -404,7 +548,9 @@ ${lengthInstruction}
             <div className="hero-section animate-fade-in">
                 <h1 className="hero-title">과세특(자유학기 세특)</h1>
                 <p className="hero-subtitle">
-                    특정 과목 시간에 활동한 내용을 바탕으로 <span className="highlight">과목별(자유학기) 세부능력 및 특기사항</span>을 생성합니다.
+                    특정 과목 시간에 활동한 내용을 바탕으로
+                    <br />
+                    <span className="highlight hero-subtitle-emphasis">과목별(자유학기) 세부능력 및 특기사항</span>을 생성합니다.
                 </p>
             </div>
 
@@ -597,55 +743,97 @@ ${lengthInstruction}
                         </div>
                         <h2>생성 옵션</h2>
                     </div>
-                    <div className="grid-2-cols items-end">
-                        <div className="form-group" style={{ marginBottom: 0 }}>
-                            <label className="form-label">글자수 제한</label>
-                            <select
-                                value={textLength}
-                                onChange={(e) => setTextLength(e.target.value)}
-                                className="form-select"
+                    <div className="grid-2-cols">
+                        <div className="flex flex-col gap-4">
+                            <div className="form-group" style={{ marginBottom: 0 }}>
+                                <label className="form-label">글자수 제한</label>
+                                <select
+                                    value={textLength}
+                                    onChange={(e) => setTextLength(e.target.value)}
+                                    className="form-select"
+                                >
+                                    <option value="1500">1500byte (한글 약 490자)</option>
+                                    <option value="1000">1000byte (한글 약 333자)</option>
+                                    <option value="600">600byte (한글 약 200자)</option>
+                                    <option value="manual">직접 입력</option>
+                                </select>
+                                {textLength === "manual" && (
+                                    <input
+                                        type="number"
+                                        value={manualLength}
+                                        onChange={(e) => setManualLength(e.target.value)}
+                                        placeholder="byte 단위 입력 (예: 800)"
+                                        className="form-input mt-2"
+                                    />
+                                )}
+                            </div>
+
+                            <label
+                                className="form-label"
+                                style={{
+                                    display: 'flex',
+                                    alignItems: 'flex-start',
+                                    gap: '10px',
+                                    padding: '12px',
+                                    border: '1px solid #fed7aa',
+                                    borderRadius: '8px',
+                                    backgroundColor: '#fff7ed',
+                                    cursor: 'pointer',
+                                    lineHeight: 1.45
+                                }}
                             >
-                                <option value="1500">1500byte (한글 약 500자)</option>
-                                <option value="1000">1000byte (한글 약 333자)</option>
-                                <option value="600">600byte (한글 약 200자)</option>
-                                <option value="manual">직접 입력</option>
-                            </select>
-                            {textLength === "manual" && (
                                 <input
-                                    type="number"
-                                    value={manualLength}
-                                    onChange={(e) => setManualLength(e.target.value)}
-                                    placeholder="글자수 입력"
-                                    className="form-input mt-2"
+                                    type="checkbox"
+                                    checked={useWebSearchContext}
+                                    onChange={(e) => setUseWebSearchContext(e.target.checked)}
+                                    style={{ marginTop: '3px', flexShrink: 0 }}
                                 />
-                            )}
+                                <span>
+                                    <strong>학생 개별 활동 내용 웹 검색 보강</strong>
+                                    <br />
+                                    <span style={{ color: '#6b7280', fontSize: '0.8rem', fontWeight: 400 }}>
+                                        학생별 개별 활동 내용을 검색해 작품, 논문, 연구, 쟁점의 맥락을 보강합니다.
+                                    </span>
+                                </span>
+                            </label>
+
+                            <div className="flex gap-2">
+                                <button
+                                    onClick={generateAll}
+                                    disabled={isGenerating}
+                                    className="btn-primary flex-1"
+                                    style={{ padding: '12px', fontSize: '1.1rem' }}
+                                >
+                                    {isGenerating ? (
+                                        <>
+                                            <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>
+                                            {generationStatusText}
+                                        </>
+                                    ) : (
+                                        <>
+                                            <Wand2 size={20} /> AI 생성
+                                        </>
+                                    )}
+                                </button>
+                                <button
+                                    onClick={downloadExcel}
+                                    className="btn-secondary"
+                                    style={{ padding: '0 24px', display: 'flex', alignItems: 'center', gap: '8px' }}
+                                >
+                                    <Download size={20} /> 엑셀
+                                </button>
+                            </div>
                         </div>
 
-                        <div className="flex gap-4">
-                            <button
-                                onClick={generateAll}
-                                disabled={isGenerating}
-                                className="btn-primary flex-1"
-                                style={{ padding: '12px', fontSize: '1.1rem' }}
-                            >
-                                {isGenerating ? (
-                                    <>
-                                        <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>
-                                        생성 중...
-                                    </>
-                                ) : (
-                                    <>
-                                        <Wand2 size={20} /> 전체 학생 AI 생성
-                                    </>
-                                )}
-                            </button>
-                            <button
-                                onClick={downloadExcel}
-                                className="btn-secondary"
-                                style={{ padding: '0 24px', display: 'flex', alignItems: 'center', gap: '8px' }}
-                            >
-                                <Download size={20} /> 엑셀 다운로드
-                            </button>
+                        <div className="flex flex-col gap-3">
+                            <OpenAIKeyControl
+                                openAIKeyInput={openAIKeyInput}
+                                setOpenAIKeyInput={setOpenAIKeyInput}
+                                applyOpenAIKey={applyOpenAIKey}
+                                clearOpenAIKey={clearOpenAIKey}
+                                isOpenAIKeyApplied={isOpenAIKeyApplied}
+                                maskedOpenAIKey={maskedOpenAIKey}
+                            />
                         </div>
                     </div>
                 </div>
@@ -683,17 +871,33 @@ ${lengthInstruction}
                                         />
                                     </div>
 
-                                    <div className="flex gap-2 justify-center" style={{ marginTop: 'auto' }}>
-                                        {["A", "B", "C"].map((grade) => (
-                                            <button
-                                                key={grade}
-                                                onClick={() => updateStudent(student.id, "grade", grade)}
-                                                className={`btn-grade ${student.grade === grade ? `selected grade-${grade}` : ''}`}
-                                            >
-                                                {grade}
-                                            </button>
-                                        ))}
-                                    </div>
+                                    {schoolLevel !== "high" && (
+                                        <div className="activity-grade-panel">
+                                            <div className="activity-grade-title">활동별 성취도</div>
+                                            {activities.map((activity, activityIndex) => (
+                                                <div key={activityIndex} className="activity-grade-row">
+                                                    <span
+                                                        className="activity-grade-label"
+                                                        title={activity || `활동 ${activityIndex + 1}`}
+                                                    >
+                                                        활동 {activityIndex + 1}
+                                                    </span>
+                                                    <div className="activity-grade-buttons">
+                                                        {GRADE_OPTIONS.map((grade) => (
+                                                            <button
+                                                                key={grade}
+                                                                type="button"
+                                                                onClick={() => updateStudentActivityGrade(student.id, activityIndex, grade)}
+                                                                className={`btn-grade btn-grade-sm ${getActivityGrade(student, activityIndex) === grade ? `selected grade-${grade}` : ''}`}
+                                                            >
+                                                                {grade}
+                                                            </button>
+                                                        ))}
+                                                    </div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    )}
 
                                     {/* 학생별 개별 활동 내용 입력 */}
                                     <div className="form-group" style={{ marginBottom: 0, marginTop: '8px' }}>
@@ -775,17 +979,21 @@ ${lengthInstruction}
                                         {student.status === "loading" && (
                                             <div className="loading-overlay">
                                                 <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mb-2"></div>
-                                                <span style={{ fontSize: '0.9rem', fontWeight: 500, color: '#2563eb' }}>생성 중...</span>
+                                                <span style={{ fontSize: '0.9rem', fontWeight: 500, color: '#2563eb' }}>
+                                                    {student.progress || generationStatusText}
+                                                </span>
                                             </div>
                                         )}
                                     </div>
 
-                                    {/* 복사 버튼 */}
+                                    {/* 결과 정보 및 복사 버튼 */}
                                     {student.result && (
-                                        <div className="flex justify-end mt-2">
+                                        <div className="result-action-row">
+                                            <span className="result-byte-count">
+                                                {getUtf8ByteLength(student.result).toLocaleString()} byte
+                                            </span>
                                             <button
                                                 onClick={() => {
-                                                    // Clipboard API fallback for HTTP
                                                     const copyText = (text) => {
                                                         if (navigator.clipboard && window.isSecureContext) {
                                                             navigator.clipboard.writeText(text);
@@ -801,29 +1009,17 @@ ${lengthInstruction}
                                                         }
                                                     };
                                                     copyText(student.result);
-                                                    const btn = document.getElementById(`copy-btn-${student.id}`);
-                                                    if (btn) {
-                                                        btn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg><span>복사됨!</span>';
-                                                        setTimeout(() => {
-                                                            btn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"></rect><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"></path></svg><span>복사</span>';
-                                                        }, 1500);
-                                                    }
+                                                    setCopiedId(student.id);
+                                                    setTimeout(() => setCopiedId(null), 1500);
                                                 }}
-                                                id={`copy-btn-${student.id}`}
-                                                className="btn-secondary"
-                                                style={{
-                                                    padding: '4px 10px',
-                                                    fontSize: '0.75rem',
-                                                    display: 'flex',
-                                                    alignItems: 'center',
-                                                    gap: '4px',
-                                                    color: '#6b7280',
-                                                    borderColor: '#e5e7eb'
-                                                }}
+                                                className={`btn-copy ${copiedId === student.id ? 'copied' : ''}`}
                                                 title="클립보드에 복사"
                                             >
-                                                <Copy size={14} />
-                                                <span>복사</span>
+                                                {copiedId === student.id ? (
+                                                    <><Check size={14} /> 복사됨!</>
+                                                ) : (
+                                                    <><Copy size={14} /> 복사</>
+                                                )}
                                             </button>
                                         </div>
                                     )}

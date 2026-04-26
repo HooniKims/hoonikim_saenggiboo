@@ -1,10 +1,17 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
-import { Plus, Trash2, Upload, Download, Wand2, FileSpreadsheet, Users, UserX, Copy } from "lucide-react";
+import { Plus, Trash2, Upload, Download, Wand2, FileSpreadsheet, Users, UserX, Copy, Check } from "lucide-react";
 import * as XLSX from "xlsx";
 import { writeExcel } from "../../utils/excel";
-import { cleanMetaInfo, truncateToCompleteSentence, getCharacterGuideline, getPromptCharLimit } from "../../utils/textProcessor";
+import { getCharacterGuideline, getMinimumTargetBytes, getUtf8ByteLength, normalizeTargetBytes, normalizeTargetChars } from "../../utils/textProcessor";
+import { fetchOpenAICompletion } from "../../utils/openAIFetch";
+import { useOpenAIKey } from "../../utils/openAIKey";
+import OpenAIKeyControl from "../../components/OpenAIKeyControl";
+import { generateWithSilentValidation } from "../../utils/generationHarness";
+import { runGenerationWithProgress } from "../../utils/generationProgress";
+import { fetchSearchContext } from "../../utils/searchContextFetch";
+import { getClubHighSchoolQualityGuidance } from "../../utils/recordQualityGuidance";
 
 export default function ClubPage() {
     // State
@@ -16,15 +23,27 @@ export default function ClubPage() {
     const [schoolLevel, setSchoolLevel] = useState("middle"); // Default to middle
 
     // Removed 'grade' from student object, added 'individualActivity' for per-student activities
-    const [students, setStudents] = useState([{ id: 1, name: "", individualActivity: "", result: "", status: "idle" }]);
+    const [students, setStudents] = useState([{ id: 1, name: "", individualActivity: "", result: "", status: "idle", progress: "" }]);
     const [activities, setActivities] = useState([""]);
     const [additionalInstructions, setAdditionalInstructions] = useState(""); // 추가 지침 사항
     const [textLength, setTextLength] = useState("1500");
     const [manualLength, setManualLength] = useState("");
     const [isGenerating, setIsGenerating] = useState(false);
+    const [useWebSearchContext, setUseWebSearchContext] = useState(false);
+    const [copiedId, setCopiedId] = useState(null);
     const fileInputRef = useRef(null);
     const activityInputRefs = useRef([]);
     const prevActivitiesLength = useRef(activities.length);
+    const {
+        openAIKeyInput,
+        setOpenAIKeyInput,
+        appliedOpenAIKey,
+        applyOpenAIKey,
+        clearOpenAIKey,
+        isOpenAIKeyApplied,
+        maskedOpenAIKey,
+    } = useOpenAIKey();
+    const generationStatusText = appliedOpenAIKey ? "OpenAI API key를 사용하여 생성 중..." : "OpenAI API key 적용 필요";
 
     useEffect(() => {
         if (activities.length > prevActivitiesLength.current) {
@@ -47,7 +66,7 @@ export default function ClubPage() {
         const newStudents = [...students];
         if (count > newStudents.length) {
             for (let i = newStudents.length + 1; i <= count; i++) {
-                newStudents.push({ id: i, name: "", individualActivity: "", result: "", status: "idle" });
+                newStudents.push({ id: i, name: "", individualActivity: "", result: "", status: "idle", progress: "" });
             }
         } else {
             newStudents.splice(count);
@@ -187,7 +206,7 @@ export default function ClubPage() {
     };
 
 
-    // cleanMetaInfo, truncateToCompleteSentence는 textProcessor에서 import됨
+    // 생성 결과 검증과 후처리는 generationHarness에서 내부 처리됨
 
     // 학생별 개별 활동과 공통 활동 간의 관련성 점수 계산
     const calculateRelevanceScore = (commonActivity, individualActivity) => {
@@ -203,7 +222,7 @@ export default function ClubPage() {
         return score;
     };
 
-    const generatePrompt = (student, selectedActivities, targetChars, individualActivity = "") => {
+    const generatePrompt = (student, selectedActivities, targetChars, individualActivity = "", searchContext = "") => {
         // Perspectives for variety
         const perspectives = [
             '특히 학생의 적극성과 참여도를 중심으로',
@@ -216,22 +235,20 @@ export default function ClubPage() {
             '특히 자기주도성과 탐구 능력을 중심으로'
         ];
 
-        // Select perspective based on student ID (round-robin)
         const selectedPerspective = perspectives[(student.id - 1) % perspectives.length];
 
-        // Character limit logic (same as gwasetuk but simplified without grade)
         let minChar, maxChar;
         if (targetChars === 200) {
             minChar = 150; maxChar = 200;
-        } else if (targetChars === 500) {
-            minChar = 400; maxChar = 500;
+        } else if (targetChars === 490) {
+            minChar = 400; maxChar = 490;
         } else {
             minChar = Math.floor(targetChars * 0.8);
             maxChar = targetChars;
         }
 
-        // 글자수 지침은 공통 유틸에서 생성
-        const lengthInstruction = getCharacterGuideline(targetChars);
+        const targetBytes = normalizeTargetBytes(textLength, manualLength);
+        const lengthInstruction = getCharacterGuideline(targetChars, targetBytes, getMinimumTargetBytes(targetBytes));
 
         const schoolLevelMap = {
             elementary: "초등학생",
@@ -239,118 +256,184 @@ export default function ClubPage() {
             high: "고등학생"
         };
         const targetLevel = schoolLevelMap[schoolLevel] || "중학생";
-        const clubContext = clubName ? `동아리명: ${clubName}` : "동아리명: 미지정 (일반적인 동아리 활동으로 간주)";
+        // 동아리명은 시스템 참고용으로만 전달 (출력에 절대 포함 금지)
+        const clubContext = clubName ? `[시스템 참고 - 출력에 절대 포함 금지] 동아리: ${clubName}` : "";
 
-        const activitiesText = selectedActivities.map(a => `- ${a}`).join("\n");
+        const totalActivities = selectedActivities.length;
+        const activitiesText = selectedActivities.map((a, i) => `- 활동${i + 1}: ${a}`).join("\n");
 
-        // 학생별 개별 활동 내용이 있으면 추가
         const individualActivityText = individualActivity.trim()
-            ? `\n\n[이 학생의 개별 활동 내용]\n${individualActivity}\n(위 개별 활동 내용과 공통 활동 내용을 연결하여 통합적으로 서술해 주세요. 예: '환경 캠페인' 공통 활동과 '포스터 제작'이라는 개별 활동이 있으면, 환경 캠페인에서 포스터 제작을 담당한 것으로 연결하여 서술)`
+            ? `\n\n[이 학생의 개별 활동 내용]\n${individualActivity}\n(위 개별 활동 내용과 공통 활동 내용을 연결하여 통합적으로 서술해 주세요.)`
+            : "";
+        const searchContextText = searchContext.trim()
+            ? `\n\n[학생 개별 활동 내용 기반 웹 검색 보강 자료]\n${searchContext}\n(위 검색 보강 자료는 개별 활동을 정확히 이해하기 위한 배경 자료입니다. 학생이 실제로 입력한 활동과 공통 활동 내용을 우선하고, 검색 자료는 관련 개념·활동 맥락·쟁점 이해를 보강하는 데에만 사용하세요.)`
+            : "";
+        const highSchoolQualityGuidance = getClubHighSchoolQualityGuidance(schoolLevel);
+        const highSchoolQualityText = highSchoolQualityGuidance
+            ? `\n\n${highSchoolQualityGuidance}`
             : "";
 
-        return `<입력 정보>
-대상 학교급: ${targetLevel}
+        return `당신은 학교생활기록부 동아리 활동 특기사항을 작성하는 교사입니다.
+아래 ${totalActivities}개의 활동 내용을 바탕으로 동아리 세특 본문을 작성하세요.
+모든 활동을 빠짐없이 반영하되, 각 활동마다 다양한 표현과 구체적인 서술을 사용하세요.
+
+<입력 정보>
+대상: ${targetLevel}
 ${clubContext}
-작성 관점: ${selectedPerspective} 서술하라.
-입력된 활동 내용:
-${activitiesText}${individualActivityText}
-</입력 정보>
+작성 관점: ${selectedPerspective} 서술하세요.
+
+<활동 내용 - 총 ${totalActivities}개, 반드시 모두 반영>
+${activitiesText}${individualActivityText}${searchContextText}
+${highSchoolQualityText}
 
 <작성 규칙>
-1. 주어 없이 활동부터 바로 서술을 시작하라 (활동 자체를 주어로 사용 가능)
-2. 동아리명을 언급하지 않고 바로 활동 서술로 시작하라
-3. 명사형 종결어미(~함, ~보임, ~드러남)만 사용하라
-4. 소논문은 기재할 수 없으므로, 활동 과정이나 탐구 내용 중심으로 서술하라
-5. 특정 성명, 기관명, 상호명은 기재하지 않는다
-6. 활동 과정에서 겪은 어려움, 노력, 태도 변화 등을 구체적으로 기술하라
-7. '이러한', '이를 통해', '종합적으로' 등 요약 표현 대신, 활동의 세부 과정이나 탐구 내용을 서술하라
-8. 마지막 문장도 구체적 활동 내용이나 협력 모습에 대한 서술로 끝내라
-9. 입력된 활동 내용만 활용하고, 입력에 없는 구체적 사건, 실험 결과, 특정 도서명 등을 추가 서술하지 않는다
-10. 줄바꿈 없이 하나의 문단으로 작성하라
-</작성 규칙>
+1. '학생은', 'OO는' 등 주어를 사용하지 않고, 활동 내용부터 바로 서술
+2. [절대금지] 동아리명을 출력에 절대 포함하지 않음 (예: "~동아리에서", "~반에서" 등 금지)
+3. [절대금지] 과거형 표현 금지 (~했음, ~였음, ~되었음, ~하였음, ~보였음). 반드시 현재형 명사 종결어미(~함, ~보임, ~드러남, ~임, ~음)만 사용
+4. 구체적인 활동 과정, 노력, 태도 변화를 중심으로 과정 중심 서술
+5. 줄바꿈 없이 하나의 문단으로 작성
+6. 입력된 ${totalActivities}개 활동 내용을 모두 빠짐없이 서술하고, 입력에 없는 사건/실험 결과/도서명 등을 추가하지 않음
+7. 소논문, 특정 성명, 기관명, 상호명은 기재하지 않음
+8. 마지막 문장도 반드시 구체적인 활동 내용 서술로 끝냄
+9. '이러한', '이를 통해', '이와 같이', '앞으로', '향후', '결과적으로', '종합적으로', '마지막으로', '끝으로', '마무리하며', '덧붙여', '추가로'로 시작하는 요약/정리/마무리 문장 대신, 활동의 세부 과정이나 협력 모습을 추가 서술
+
+${lengthInstruction}
 
 <출력 형식>
-${lengthInstruction}
-오직 동아리 특기사항 본문 텍스트만 출력하라. 글자수, 분석 내용, 메타 정보 등 부가 설명은 일체 포함하지 않는다.
-</출력 형식>
+- 오직 동아리 특기사항 본문 텍스트만 출력
+- 글자수 표기, 분석, 검증 포인트, 부가 설명 등 메타 정보는 출력하지 않음
 
 <좋은 예시>
-"환경 보전 캠페인 기획 과정에서 자료 조사를 담당하여 미세먼지 관련 통계 데이터를 수집하고 인포그래픽으로 제작함. 캠페인 당일 홍보 부스를 운영하며 적극적인 모습을 보임."
-</좋은 예시>
+"환경 보전 칠페인 기획 과정에서 자료 조사를 담당하여 미세먼지 관련 통계 데이터를 수집하고 인포그래픽으로 제작함. 칠페인 당일 홍보 부스를 운영하며 참여 학생들에게 분리수거 방법을 안내하는 등 적극적인 모습을 보임."
     `;
     };
 
+    // 시간 순서 키워드 감지 (동아리 활동의 순서성 판단)
+    const hasTimeOrder = (acts) => {
+        const timeKeywords = ['1학기', '2학기', '1차', '2차', '3차', '4차',
+            '1월', '2월', '3월', '4월', '5월', '6월', '7월', '8월', '9월', '10월', '11월', '12월',
+            '첫 번째', '두 번째', '세 번째', '네 번째',
+            '초반', '중반', '후반', '전반기', '후반기'];
+        return acts.some(a => timeKeywords.some(kw => a.includes(kw)));
+    };
+
+    // Fisher-Yates 셔플 알고리즘 (강력한 랜덤)
+    const shuffleArray = (arr) => {
+        const shuffled = [...arr];
+        for (let i = shuffled.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+        }
+        return shuffled;
+    };
+
     const generateForStudent = async (student) => {
+        if (!appliedOpenAIKey) {
+            alert("OpenAI API key를 먼저 적용해주세요.");
+            return;
+        }
+
         const validActivities = activities.filter(a => a.trim() !== "");
         if (validActivities.length === 0 && !student.individualActivity?.trim()) {
             alert("활동 내용을 입력해주세요.");
             return;
         }
 
-        let targetChars = 500;
-        if (textLength === "1500") targetChars = 500;
-        else if (textLength === "1000") targetChars = 330;
-        else if (textLength === "600") targetChars = 200;
-        else if (textLength === "manual") targetChars = parseInt(manualLength) || 500;
+        const targetBytes = normalizeTargetBytes(textLength, manualLength);
+        const targetChars = normalizeTargetChars(textLength, manualLength);
+        const minTargetBytes = getMinimumTargetBytes(targetBytes);
 
         let selectedActivities = [...validActivities];
 
-        // 학생별 개별 활동이 있으면 관련성 높은 활동 우선 선택
+        // 동아리세특: 조건부 랜덤 셔플
         if (student.individualActivity?.trim() && validActivities.length > 0) {
-            // 관련성 점수로 정렬 (높은 점수 우선)
+            // 개별 활동이 있으면 관련성 높은 활동 우선 + 나머지 랜덤
             selectedActivities = [...validActivities].sort((a, b) => {
                 const scoreA = calculateRelevanceScore(a, student.individualActivity);
                 const scoreB = calculateRelevanceScore(b, student.individualActivity);
                 if (scoreB !== scoreA) return scoreB - scoreA;
-                return Math.random() - 0.5; // 동점일 경우 랜덤
+                return Math.random() - 0.5;
             });
-        } else if (additionalInstructions && (additionalInstructions.includes('랜덤') || additionalInstructions.includes('무작위'))) {
-            // 추가 지침에 '랜덤' 또는 '무작위' 키워드가 있으면 활동 셔플
-            selectedActivities = [...validActivities].sort(() => Math.random() - 0.5);
+        } else if (hasTimeOrder(validActivities)) {
+            // 시간 순서 키워드가 있으면 순서 유지 (다양한 표현은 프롬프트로 유도)
+            // selectedActivities = 원래 순서 유지
+        } else {
+            // 순서성 없으면 Fisher-Yates 셔플로 랜덤화
+            selectedActivities = shuffleArray(validActivities);
         }
-        // 그 외에는 원래 순서 유지
 
-        // Activity Selection Logic based on Target Chars - 강화된 로직
+        // Activity Selection Logic based on Target Chars
         if (targetChars < 80) {
-            // 매우 짧으면 1개만 선택
             selectedActivities = selectedActivities.slice(0, 1);
         } else if (targetChars <= 150) {
-            // 150자 이하: 최대 2개
             selectedActivities = selectedActivities.slice(0, Math.min(2, selectedActivities.length));
         } else if (targetChars <= 250) {
-            // 250자 이하: 최대 3개
             selectedActivities = selectedActivities.slice(0, Math.min(3, selectedActivities.length));
         } else if (targetChars <= 350) {
-            // 350자 이하 (1000byte): 최대 4개
             selectedActivities = selectedActivities.slice(0, Math.min(4, selectedActivities.length));
         }
         // 350자 초과: 모든 활동 사용
 
-        const prompt = generatePrompt(student, selectedActivities, targetChars, student.individualActivity || "");
-
         try {
             updateStudent(student.id, "status", "loading");
-            const res = await fetch("/api/generate", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ prompt, additionalInstructions })
-            });
-            const data = await res.json();
-
-            if (data.error) throw new Error(data.error);
-
-            // 글자수 초과시 후처리: 완전한 문장으로 자르기
-            let result = data.result;
-            result = truncateToCompleteSentence(result, targetChars);
-            if (data.result && result.length < data.result.length) {
-                console.log(`[글자수 조정] 원본: ${data.result.length}자 → ${result.length}자 (완전한 문장으로)`);
+            updateStudent(student.id, "progress", "생성 준비 중...");
+            let searchContext = "";
+            if (useWebSearchContext && student.individualActivity?.trim()) {
+                try {
+                    updateStudent(student.id, "progress", "웹 검색 보강 중...");
+                    const searchResult = await fetchSearchContext({
+                        subjectName: clubName,
+                        commonActivities: selectedActivities,
+                        individualActivity: student.individualActivity,
+                    });
+                    searchContext = searchResult.context || "";
+                    if (searchResult.query) {
+                        console.log(`[웹 검색 보강] 학생 ${student.id}: ${searchResult.query}`);
+                    }
+                } catch (searchError) {
+                    console.warn(`[웹 검색 보강 실패] 학생 ${student.id}: ${searchError.message}`);
+                }
             }
 
+            const prompt = generatePrompt(
+                student,
+                selectedActivities,
+                targetChars,
+                student.individualActivity || "",
+                searchContext
+            );
+            const generationResult = await generateWithSilentValidation({
+                prompt,
+                maxTargetBytes: targetBytes,
+                minTargetBytes,
+                targetChars,
+                mode: "record",
+                forbiddenTerms: [clubName, student.name],
+                maxRepairAttempts: 1,
+                generateOnce: (nextPrompt, { attempt, previousValidation }) => runGenerationWithProgress({
+                    attempt,
+                    previousValidation,
+                    provider: "openai",
+                    setProgress: (message) => updateStudent(student.id, "progress", message),
+                    run: () => fetchOpenAICompletion({ prompt: nextPrompt, additionalInstructions, apiKey: appliedOpenAIKey, targetChars }),
+                }),
+            });
+
+            if (generationResult.repaired) {
+                console.log(`[내부 검증] 학생 ${student.id}: ${generationResult.attempts}회 시도 후 규칙 보정`);
+            }
+            if (!generationResult.validation.ok) {
+                console.warn(`[내부 검증] 학생 ${student.id}: 최종 결과 일부 규칙 확인 필요`, generationResult.validation.issues);
+            }
+
+            const result = generationResult.text;
             updateStudent(student.id, "result", result);
             updateStudent(student.id, "status", "success");
+            updateStudent(student.id, "progress", "");
         } catch (error) {
             console.error(error);
             updateStudent(student.id, "status", "error");
+            updateStudent(student.id, "progress", "");
             alert(`학생 ${student.id} 생성 실패: ${error.message}`);
         }
     };
@@ -590,55 +673,97 @@ ${lengthInstruction}
                         </div>
                         <h2>생성 옵션</h2>
                     </div>
-                    <div className="grid-2-cols items-end">
-                        <div className="form-group" style={{ marginBottom: 0 }}>
-                            <label className="form-label">글자수 제한</label>
-                            <select
-                                value={textLength}
-                                onChange={(e) => setTextLength(e.target.value)}
-                                className="form-select"
+                    <div className="grid-2-cols">
+                        <div className="flex flex-col gap-4">
+                            <div className="form-group" style={{ marginBottom: 0 }}>
+                                <label className="form-label">글자수 제한</label>
+                                <select
+                                    value={textLength}
+                                    onChange={(e) => setTextLength(e.target.value)}
+                                    className="form-select"
+                                >
+                                    <option value="1500">1500byte (한글 약 490자)</option>
+                                    <option value="1000">1000byte (한글 약 333자)</option>
+                                    <option value="600">600byte (한글 약 200자)</option>
+                                    <option value="manual">직접 입력</option>
+                                </select>
+                                {textLength === "manual" && (
+                                    <input
+                                        type="number"
+                                        value={manualLength}
+                                        onChange={(e) => setManualLength(e.target.value)}
+                                        placeholder="byte 단위 입력 (예: 800)"
+                                        className="form-input mt-2"
+                                    />
+                                )}
+                            </div>
+
+                            <label
+                                className="form-label"
+                                style={{
+                                    display: 'flex',
+                                    alignItems: 'flex-start',
+                                    gap: '10px',
+                                    padding: '12px',
+                                    border: '1px solid #fed7aa',
+                                    borderRadius: '8px',
+                                    backgroundColor: '#fff7ed',
+                                    cursor: 'pointer',
+                                    lineHeight: 1.45
+                                }}
                             >
-                                <option value="1500">1500byte (한글 약 500자)</option>
-                                <option value="1000">1000byte (한글 약 333자)</option>
-                                <option value="600">600byte (한글 약 200자)</option>
-                                <option value="manual">직접 입력</option>
-                            </select>
-                            {textLength === "manual" && (
                                 <input
-                                    type="number"
-                                    value={manualLength}
-                                    onChange={(e) => setManualLength(e.target.value)}
-                                    placeholder="글자수 입력"
-                                    className="form-input mt-2"
+                                    type="checkbox"
+                                    checked={useWebSearchContext}
+                                    onChange={(e) => setUseWebSearchContext(e.target.checked)}
+                                    style={{ marginTop: '3px', flexShrink: 0 }}
                                 />
-                            )}
+                                <span>
+                                    <strong>학생 개별 활동 내용 웹 검색 보강</strong>
+                                    <br />
+                                    <span style={{ color: '#6b7280', fontSize: '0.8rem', fontWeight: 400 }}>
+                                        학생별 개별 활동 내용을 검색해 활동 주제, 개념, 쟁점의 맥락을 보강합니다.
+                                    </span>
+                                </span>
+                            </label>
+
+                            <div className="flex gap-2">
+                                <button
+                                    onClick={generateAll}
+                                    disabled={isGenerating}
+                                    className="btn-primary flex-1"
+                                    style={{ padding: '12px', fontSize: '1.1rem' }}
+                                >
+                                    {isGenerating ? (
+                                        <>
+                                            <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>
+                                            {generationStatusText}
+                                        </>
+                                    ) : (
+                                        <>
+                                            <Wand2 size={20} /> AI 생성
+                                        </>
+                                    )}
+                                </button>
+                                <button
+                                    onClick={downloadExcel}
+                                    className="btn-secondary"
+                                    style={{ padding: '0 24px', display: 'flex', alignItems: 'center', gap: '8px' }}
+                                >
+                                    <Download size={20} /> 엑셀
+                                </button>
+                            </div>
                         </div>
 
-                        <div className="flex gap-4">
-                            <button
-                                onClick={generateAll}
-                                disabled={isGenerating}
-                                className="btn-primary flex-1"
-                                style={{ padding: '12px', fontSize: '1.1rem' }}
-                            >
-                                {isGenerating ? (
-                                    <>
-                                        <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>
-                                        생성 중...
-                                    </>
-                                ) : (
-                                    <>
-                                        <Wand2 size={20} /> 전체 학생 AI 생성
-                                    </>
-                                )}
-                            </button>
-                            <button
-                                onClick={downloadExcel}
-                                className="btn-secondary"
-                                style={{ padding: '0 24px', display: 'flex', alignItems: 'center', gap: '8px' }}
-                            >
-                                <Download size={20} /> 엑셀 다운로드
-                            </button>
+                        <div className="flex flex-col gap-3">
+                            <OpenAIKeyControl
+                                openAIKeyInput={openAIKeyInput}
+                                setOpenAIKeyInput={setOpenAIKeyInput}
+                                applyOpenAIKey={applyOpenAIKey}
+                                clearOpenAIKey={clearOpenAIKey}
+                                isOpenAIKeyApplied={isOpenAIKeyApplied}
+                                maskedOpenAIKey={maskedOpenAIKey}
+                            />
                         </div>
                     </div>
                 </div>
@@ -758,17 +883,21 @@ ${lengthInstruction}
                                         {student.status === "loading" && (
                                             <div className="loading-overlay">
                                                 <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mb-2"></div>
-                                                <span style={{ fontSize: '0.9rem', fontWeight: 500, color: '#2563eb' }}>생성 중...</span>
+                                                <span style={{ fontSize: '0.9rem', fontWeight: 500, color: '#2563eb' }}>
+                                                    {student.progress || generationStatusText}
+                                                </span>
                                             </div>
                                         )}
                                     </div>
 
-                                    {/* 복사 버튼 */}
+                                    {/* 결과 정보 및 복사 버튼 */}
                                     {student.result && (
-                                        <div className="flex justify-end mt-2">
+                                        <div className="result-action-row">
+                                            <span className="result-byte-count">
+                                                {getUtf8ByteLength(student.result).toLocaleString()} byte
+                                            </span>
                                             <button
                                                 onClick={() => {
-                                                    // Clipboard API fallback for HTTP
                                                     const copyText = (text) => {
                                                         if (navigator.clipboard && window.isSecureContext) {
                                                             navigator.clipboard.writeText(text);
@@ -784,29 +913,17 @@ ${lengthInstruction}
                                                         }
                                                     };
                                                     copyText(student.result);
-                                                    const btn = document.getElementById(`copy-btn-club-${student.id}`);
-                                                    if (btn) {
-                                                        btn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg><span>복사됨!</span>';
-                                                        setTimeout(() => {
-                                                            btn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"></rect><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"></path></svg><span>복사</span>';
-                                                        }, 1500);
-                                                    }
+                                                    setCopiedId(student.id);
+                                                    setTimeout(() => setCopiedId(null), 1500);
                                                 }}
-                                                id={`copy-btn-club-${student.id}`}
-                                                className="btn-secondary"
-                                                style={{
-                                                    padding: '4px 10px',
-                                                    fontSize: '0.75rem',
-                                                    display: 'flex',
-                                                    alignItems: 'center',
-                                                    gap: '4px',
-                                                    color: '#6b7280',
-                                                    borderColor: '#e5e7eb'
-                                                }}
+                                                className={`btn-copy ${copiedId === student.id ? 'copied' : ''}`}
                                                 title="클립보드에 복사"
                                             >
-                                                <Copy size={14} />
-                                                <span>복사</span>
+                                                {copiedId === student.id ? (
+                                                    <><Check size={14} /> 복사됨!</>
+                                                ) : (
+                                                    <><Copy size={14} /> 복사</>
+                                                )}
                                             </button>
                                         </div>
                                     )}

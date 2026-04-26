@@ -1,5 +1,5 @@
-import { DEFAULT_OPENAI_MODEL } from "../../../utils/openAIFetch.js";
 import { getMaxTokensForTargetChars } from "../../../utils/textProcessor.js";
+import { DEFAULT_OPENAI_MODEL } from "../../../utils/openAIFetch.js";
 
 const OPENAI_API_URL = "https://api.openai.com/v1/chat/completions";
 
@@ -44,6 +44,36 @@ function getOpenAIMaxCompletionTokens(targetChars) {
     return Math.max(4096, Math.min(8192, baseTokens * 4));
 }
 
+async function callOpenAI({ apiKey, prompt, additionalInstructions, targetChars, model }) {
+    const maxTokens = getOpenAIMaxCompletionTokens(targetChars);
+    const response = await fetch(OPENAI_API_URL, {
+        method: "POST",
+        headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify({
+            model,
+            messages: [
+                { role: "system", content: buildSystemMessage(additionalInstructions) },
+                { role: "user", content: buildUserMessage(prompt, additionalInstructions) },
+            ],
+            max_completion_tokens: maxTokens,
+            reasoning_effort: "minimal",
+        }),
+    });
+
+    const rawText = await response.text();
+    let data = {};
+    try {
+        data = rawText ? JSON.parse(rawText) : {};
+    } catch {
+        data = { error: { message: rawText } };
+    }
+
+    return { response, data };
+}
+
 export async function POST(req) {
     try {
         const body = await req.json();
@@ -56,29 +86,24 @@ export async function POST(req) {
             return Response.json({ error: "생성할 프롬프트가 비어 있습니다." }, { status: 400 });
         }
 
-        const response = await fetch(OPENAI_API_URL, {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json",
-                Authorization: `Bearer ${apiKey.trim()}`,
-            },
-            body: JSON.stringify({
-                model: DEFAULT_OPENAI_MODEL,
-                messages: [
-                    { role: "system", content: buildSystemMessage(additionalInstructions) },
-                    { role: "user", content: buildUserMessage(prompt, additionalInstructions) },
-                ],
-                max_completion_tokens: getOpenAIMaxCompletionTokens(targetChars),
-                reasoning_effort: "minimal",
-            }),
+        let { response, data } = await callOpenAI({
+            apiKey: apiKey.trim(),
+            prompt,
+            additionalInstructions,
+            targetChars,
+            model: DEFAULT_OPENAI_MODEL,
         });
 
-        const rawText = await response.text();
-        let data = {};
-        try {
-            data = rawText ? JSON.parse(rawText) : {};
-        } catch {
-            data = { error: { message: rawText } };
+        if (response.ok && !extractContent(data)) {
+            const retry = await callOpenAI({
+                apiKey: apiKey.trim(),
+                prompt: `${prompt}\n\n[분량 보정] 이전 응답에서 표시 가능한 본문이 생성되지 않았습니다. 추론을 짧게 하고, 본문 텍스트만 바로 출력하세요.`,
+                additionalInstructions,
+                targetChars: Math.ceil((Number(targetChars) || 490) * 1.2),
+                model: DEFAULT_OPENAI_MODEL,
+            });
+            response = retry.response;
+            data = retry.data;
         }
 
         if (!response.ok) {
@@ -88,7 +113,10 @@ export async function POST(req) {
 
         const content = extractContent(data);
         if (!content) {
-            return Response.json({ error: "OpenAI API 응답에서 생성 텍스트를 찾지 못했습니다." }, { status: 502 });
+            const finishReason = data?.choices?.[0]?.finish_reason;
+            return Response.json({
+                error: `OpenAI API 응답에서 생성 텍스트를 찾지 못했습니다.${finishReason ? ` finish_reason=${finishReason}` : ""}`,
+            }, { status: 502 });
         }
 
         return Response.json({ result: content, model: DEFAULT_OPENAI_MODEL });
