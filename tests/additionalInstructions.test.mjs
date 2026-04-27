@@ -1,4 +1,4 @@
-import test from "node:test";
+﻿import test from "node:test";
 import assert from "node:assert/strict";
 
 import { fetchOpenAICompletion } from "../utils/openAIFetch.js";
@@ -95,7 +95,7 @@ test("fetchStream retry prompt preserves the original writing conditions", async
 
     try {
         await fetchStream({
-            prompt: "[활동별 A/B/C 반영 기준]\n- 활동1: A(매우 잘함)\n- 활동2: C(보통)",
+            prompt: "[활동별 A/B/C 반영 기준]\n- 활동1: A(매우 잘함)\n- 활동2: C(노력 필요)",
             model: "gemma4:e4b",
             targetChars: 120,
         });
@@ -106,7 +106,7 @@ test("fetchStream retry prompt preserves the original writing conditions", async
     assert.equal(calls.length, 2);
     assert.match(calls[1].messages[1].content, /\[원래 작성 조건\]/);
     assert.match(calls[1].messages[1].content, /활동1: A\(매우 잘함\)/);
-    assert.match(calls[1].messages[1].content, /활동2: C\(보통\)/);
+    assert.match(calls[1].messages[1].content, /활동2: C\(노력 필요\)/);
 });
 
 test("fetchStream does not retry complete noun-ending sentences", async () => {
