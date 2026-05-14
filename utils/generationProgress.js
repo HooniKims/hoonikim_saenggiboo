@@ -1,6 +1,4 @@
-const PROVIDER_LABELS = {
-    local: "로컬 LLM",
-    nvidia: "NVIDIA Cloud 모델",
+﻿const PROVIDER_LABELS = {
     openai: "OpenAI API",
 };
 
@@ -59,8 +57,7 @@ export async function runGenerationWithProgress({
     return run();
 }
 
-export function getGenerationProvider({ isNvidiaSelected = false, hasOpenAIKey = false } = {}) {
-    if (isNvidiaSelected) return "nvidia";
+export function getGenerationProvider({ hasOpenAIKey = false } = {}) {
     if (hasOpenAIKey) return "openai";
-    return "local";
+    return "openai";
 }

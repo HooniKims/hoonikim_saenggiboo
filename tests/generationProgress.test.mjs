@@ -1,26 +1,7 @@
-import test from "node:test";
+﻿import test from "node:test";
 import assert from "node:assert/strict";
 
-import { runGenerationWithProgress } from "../utils/generationProgress.js";
-
-test("runGenerationWithProgress shows NVIDIA connection and generation stages separately", async () => {
-    const messages = [];
-    const result = await runGenerationWithProgress({
-        provider: "nvidia",
-        attempt: 0,
-        maxRepairAttempts: 4,
-        setProgress: (message) => messages.push(message),
-        sleep: async () => undefined,
-        run: async () => "done",
-    });
-
-    assert.equal(result, "done");
-    assert.deepEqual(messages, [
-        "NVIDIA Cloud 모델 접속 중...",
-        "NVIDIA Cloud 모델 접속 완료, 생성 요청 중...",
-        "NVIDIA Cloud 모델 생성 중...",
-    ]);
-});
+import { getGenerationProvider, runGenerationWithProgress } from "../utils/generationProgress.js";
 
 test("runGenerationWithProgress shows OpenAI connection and generation stages separately", async () => {
     const messages = [];
@@ -40,28 +21,10 @@ test("runGenerationWithProgress shows OpenAI connection and generation stages se
     ]);
 });
 
-test("runGenerationWithProgress shows local LLM connection and generation stages separately", async () => {
-    const messages = [];
-    await runGenerationWithProgress({
-        provider: "local",
-        attempt: 0,
-        maxRepairAttempts: 4,
-        setProgress: (message) => messages.push(message),
-        sleep: async () => undefined,
-        run: async () => "done",
-    });
-
-    assert.deepEqual(messages, [
-        "로컬 LLM 접속 중...",
-        "로컬 LLM 접속 완료, 생성 요청 중...",
-        "로컬 LLM 생성 중...",
-    ]);
-});
-
 test("runGenerationWithProgress uses user-friendly repair retry wording", async () => {
     const messages = [];
     await runGenerationWithProgress({
-        provider: "nvidia",
+        provider: "openai",
         attempt: 2,
         maxRepairAttempts: 4,
         setProgress: (message) => messages.push(message),
@@ -75,7 +38,7 @@ test("runGenerationWithProgress uses user-friendly repair retry wording", async 
 test("runGenerationWithProgress explains short-output repair in plain Korean", async () => {
     const messages = [];
     await runGenerationWithProgress({
-        provider: "nvidia",
+        provider: "openai",
         attempt: 1,
         maxRepairAttempts: 4,
         previousValidation: {
@@ -87,4 +50,9 @@ test("runGenerationWithProgress explains short-output repair in plain Korean", a
     });
 
     assert.deepEqual(messages, ["분량이 부족해서 내용을 더 채우는 중... 1/4"]);
+});
+
+test("getGenerationProvider always resolves to OpenAI for the school build", () => {
+    assert.equal(getGenerationProvider({ hasOpenAIKey: true }), "openai");
+    assert.equal(getGenerationProvider({ hasOpenAIKey: false }), "openai");
 });

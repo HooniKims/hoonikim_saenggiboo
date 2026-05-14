@@ -11,6 +11,7 @@ import OpenAIKeyControl from "../../components/OpenAIKeyControl";
 import { generateWithSilentValidation } from "../../utils/generationHarness";
 import { runGenerationWithProgress } from "../../utils/generationProgress";
 import { fetchSearchContext } from "../../utils/searchContextFetch";
+import { limitActivitiesByTargetChars, shouldSelectRandomFourActivities } from "../../utils/activitySelection";
 
 const GRADE_OPTIONS = ["A", "B", "C"];
 
@@ -374,10 +375,11 @@ ${activityGradeInstruction}
 4. ${targetLevel} 수준에 맞는 어휘 사용
 5. 줄바꿈 없이 하나의 문단으로 작성
 6. 입력된 ${totalActivities}개 활동 내용을 모두 빠짐없이 서술하고, 활동 내용 목록의 순서를 유지하며, 입력에 없는 사실은 추가하지 않음
-7. 마지막 문장도 반드시 구체적인 활동 내용이나 학습 과정 서술로 끝냄
-8. '이러한', '이를 통해', '이와 같이', '앞으로', '향후', '결과적으로', '종합적으로', '마지막으로', '끝으로', '마무리하며', '덧붙여', '추가로'로 시작하는 요약/정리/마무리 문장 대신, 활동의 세부 과정이나 탐구 내용을 추가 서술
-9. 문학작품을 언급할 때는 반드시 작품명(작가명) 형식으로만 표기함. 예: 소나기(황순원), 운수좋은 날(현진건). '황순원의 소나기', '현진건의 운수좋은 날'처럼 쓰지 않음
-10. 활동별 A/B/C 기준이 있으면 A는 최고 수준의 심화·주도성, B는 노력하며 수행한 성실한 참여·핵심 이해, C는 기준점에 아직 충분히 도달하지 못해 추가적인 노력이 필요한 지점 중심으로 표현 강도를 구분함
+7. 첫 문장은 반드시 위 <활동 내용>의 활동1 공통 활동으로 시작하고, [이 학생의 개별 활동 내용]이나 검색 보강 자료를 첫 활동처럼 앞세우지 않음
+8. 마지막 문장도 반드시 구체적인 활동 내용이나 학습 과정 서술로 끝냄
+9. '이러한', '이를 통해', '이와 같이', '앞으로', '향후', '결과적으로', '종합적으로', '마지막으로', '끝으로', '마무리하며', '덧붙여', '추가로'로 시작하는 요약/정리/마무리 문장 대신, 활동의 세부 과정이나 탐구 내용을 추가 서술
+10. 문학작품을 언급할 때는 반드시 작품명(작가명) 형식으로만 표기함. 예: 소나기(황순원), 운수좋은 날(현진건). '황순원의 소나기', '현진건의 운수좋은 날'처럼 쓰지 않음
+11. 활동별 A/B/C 기준이 있으면 A는 최고 수준의 심화·주도성, B는 노력하며 수행한 성실한 참여·핵심 이해, C는 기준점에 아직 충분히 도달하지 못해 추가적인 노력이 필요한 지점 중심으로 표현 강도를 구분함
 
 ${lengthInstruction}
 
@@ -425,17 +427,13 @@ ${lengthInstruction}
 
         // 개인별 활동 내용이 있어도 공통 활동 순서는 항상 Fisher-Yates 셔플로 랜덤화
         let selectedActivityEntries = shuffleArray(validActivityEntries);
-
-        // Activity Selection Logic based on Target Chars
-        if (targetChars < 80) {
-            selectedActivityEntries = selectedActivityEntries.slice(0, 1);
-        } else if (targetChars <= 150) {
-            selectedActivityEntries = selectedActivityEntries.slice(0, Math.min(2, selectedActivityEntries.length));
-        } else if (targetChars <= 250) {
-            selectedActivityEntries = selectedActivityEntries.slice(0, Math.min(3, selectedActivityEntries.length));
-        } else if (targetChars <= 350) {
+        const forceRandomFourActivities = shouldSelectRandomFourActivities(additionalInstructions);
+        if (forceRandomFourActivities) {
             selectedActivityEntries = selectedActivityEntries.slice(0, Math.min(4, selectedActivityEntries.length));
         }
+
+        // Activity Selection Logic based on Target Chars
+        selectedActivityEntries = limitActivitiesByTargetChars(selectedActivityEntries, targetChars);
         // 350자 초과: 모든 활동 사용
 
         try {

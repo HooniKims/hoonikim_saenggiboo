@@ -1,36 +1,37 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+﻿# 생기부 작성 도우미(교내용)
 
-## Getting Started
+한국어 학교생활기록부 문장 생성을 돕는 Next.js 앱입니다. 과세특, 동아리 세특, 행발, 가정통신문 작성 화면을 제공하며, 교내용 빌드는 사용자가 화면에서 적용한 OpenAI API key와 고정 모델 `gpt-5-mini` 경로만 사용합니다.
 
-First, run the development server:
+## 실행
 
 ```bash
+npm install
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+개발 서버는 기본적으로 `http://localhost:3000`에서 실행됩니다.
 
-You can start editing the page by modifying `app/page.js`. The page auto-updates as you edit the file.
+## 검증
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+```bash
+npm test
+npm run build
+```
 
-## Learn More
+`npm test`는 `tests/*.test.mjs`의 Node 테스트를 실행합니다. `npm run build`는 `/gwasetuk`, `/club`, `/behavior`, `/letter` 라우트와 API 라우트의 프로덕션 빌드를 확인합니다.
 
-To learn more about Next.js, take a look at the following resources:
+## 주요 구조
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+- `app/gwasetuk`: 과세특 작성
+- `app/club`: 동아리 세특 작성
+- `app/behavior`: 행발 작성
+- `app/letter`: 가정통신문 작성
+- `app/api/openai-generate`: OpenAI 생성 API
+- `utils/`: 생성 검증, OpenAI 호출, 글자수/byte 처리, 엑셀 처리 유틸
+- `tests/`: 프롬프트, 검증, 라우트 연결, 페이지 parity 회귀 테스트
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## 운영 메모
 
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+- `.env`나 API key를 커밋하지 않습니다.
+- Ollama, LM Studio, NVIDIA, 외부 프록시 문서는 교내용 빌드에서 제거되었습니다.
+- 진행 내역과 적용 완료 항목은 `task.md`에 기록합니다.

@@ -1,4 +1,4 @@
-import test from "node:test";
+﻿import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
@@ -52,4 +52,19 @@ test("OpenAI API routes force gpt-5-mini without fallback model switching", () =
 
     assert.match(legacyRoute, /DEFAULT_OPENAI_MODEL/);
     assert.doesNotMatch(legacyRoute, /DEFAULT_LOCAL_MODEL|LOCAL_LLM|lm\.alluser\.site|api\.alluser\.site/);
+});
+
+test("obsolete local and NVIDIA generation artifacts are removed", () => {
+    const removedPaths = [
+        "ollama.md",
+        "local-llm-api-guide.md",
+        "utils/streamFetch.js",
+        "utils/nvidiaFetch.js",
+        "app/api/nvidia-generate/route.js",
+        "tests/nvidiaFetch.test.mjs",
+    ];
+
+    for (const removedPath of removedPaths) {
+        assert.equal(existsSync(join(root, removedPath)), false, `${removedPath} should be removed`);
+    }
 });

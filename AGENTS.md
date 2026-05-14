@@ -1,8 +1,8 @@
-# Repository Guidelines
+﻿# Repository Guidelines
 
 ## Project Structure & Module Organization
 
-This is a Next.js app for generating Korean student record text. Route pages live under `app/`: `app/gwasetuk` for subject records, `app/club` for club records, `app/behavior` for behavior comments, and `app/letter` for home letters. API routes are in `app/api/*`, shared UI is in `components/`, and generation helpers, model calls, validation, Excel export, and text processing live in `utils/`. Tests are in `tests/*.test.mjs`. Static assets are in `public/`, sample spreadsheets are in `sample data/`, and operational notes are kept in `task.md`, `ollama.md`, and `local-llm-api-guide.md`.
+This is a Next.js app for generating Korean student record text. Route pages live under `app/`: `app/gwasetuk` for subject records, `app/club` for club records, `app/behavior` for behavior comments, and `app/letter` for home letters. API routes are in `app/api/*`, shared UI is in `components/`, and generation helpers, OpenAI model calls, validation, Excel export, and text processing live in `utils/`. Tests are in `tests/*.test.mjs`. Static assets are in `public/`, sample spreadsheets are in `sample data/`, and operational progress is tracked in `task.md`.
 
 ## Build, Test, and Development Commands
 
@@ -27,7 +27,7 @@ Recent history uses short imperative summaries and occasional Conventional Commi
 
 ## Security & Configuration Tips
 
-Do not commit secrets from `.env` or API keys shown during local testing. When changing local LLM, OpenAI, LM Studio, or external proxy behavior, update the relevant docs and verify error handling for non-200 responses.
+Do not commit secrets from `.env` or API keys shown during local testing. This school build uses the user-provided OpenAI API key path only; do not reintroduce Ollama, LM Studio, NVIDIA, or external proxy credentials unless the repository owner explicitly requests it. When changing OpenAI behavior, update `task.md` and verify error handling for non-200 responses.
 
 ## Agent-Specific Instructions
 
