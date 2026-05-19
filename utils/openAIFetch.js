@@ -5,7 +5,7 @@ export function getOpenAIModelLabel(modelId) {
     return modelId === DEFAULT_OPENAI_MODEL ? OPENAI_MODEL_LABEL : modelId;
 }
 
-export async function fetchOpenAICompletion({ prompt, additionalInstructions, apiKey, targetChars }) {
+export async function fetchOpenAICompletion({ prompt, additionalInstructions, apiKey, targetChars, outputType = "record" }) {
     if (!apiKey?.trim()) {
         throw new Error("OpenAI API key가 적용되지 않았습니다.");
     }
@@ -20,6 +20,7 @@ export async function fetchOpenAICompletion({ prompt, additionalInstructions, ap
             additionalInstructions,
             apiKey: apiKey.trim(),
             targetChars,
+            outputType,
         }),
     });
 
