@@ -1,4 +1,4 @@
-﻿import test from "node:test";
+import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
@@ -51,7 +51,7 @@ test("OpenAI API routes force gpt-5-mini without fallback model switching", () =
     assert.doesNotMatch(openAIRoute, /model\s*:\s*model|model\s*:\s*requestedModel/);
 
     assert.match(legacyRoute, /DEFAULT_OPENAI_MODEL/);
-    assert.doesNotMatch(legacyRoute, /DEFAULT_LOCAL_MODEL|LOCAL_LLM|lm\.alluser\.site|api\.alluser\.site/);
+    assert.doesNotMatch(legacyRoute, /DEFAULT_LOCAL_MODEL|LOCAL_LLM|lm\.alluser\.(?:site|kr)|api\.alluser\.site/);
 });
 
 test("obsolete local and NVIDIA generation artifacts are removed", () => {
