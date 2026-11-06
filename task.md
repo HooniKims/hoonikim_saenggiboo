@@ -1,4 +1,4 @@
-﻿# 생기부 작성 도우미 (School Life Record Helper) - 개발 진행 상황
+# 생기부 작성 도우미 (School Life Record Helper) - 개발 진행 상황
 
 ## Phase 1: 프로젝트 초기화 및 랜딩 페이지 구축 (완료)
 - [x] **프로젝트 초기화**
@@ -597,10 +597,10 @@ NEIS 자동 입력 크롬 확장 프로그램 개발이 완료되었습니다.
 - [x] **LM Studio 모델 자동 사용 경로 추가**
     - [x] `.env`에 `LMSTUDIO_API_URL`, `LMSTUDIO_API_KEY`, `LMSTUDIO_GEMMA_26B_MODEL` 추가
     - [x] `Gemma 4 26B Q4 - 속도 느림, 품질 높음` 모델을 로컬 모델 4번째로 추가
-    - [x] 해당 모델 선택 시 사용자가 URL/API key를 입력하지 않아도 `https://lm.alluser.site`와 모델 identifier `gemma-4-26b-a4b-it`를 자동 사용하도록 구성
+    - [x] 해당 모델 선택 시 사용자가 URL/API key를 입력하지 않아도 `https://lm.alluser.kr`와 모델 identifier `gemma-4-26b-a4b-it`를 자동 사용하도록 구성
     - [x] 실제 파일 기준 `Q4_K_S` 양자화 GGUF 모델이므로 UI 표시명을 `Gemma 4 26B Q4`로 정리
 - [x] **LM Studio/NPM 연결 원인 분석**
-    - [x] `https://lm.alluser.site/v1/models`의 `502 Bad Gateway`가 앱 코드 문제가 아니라 NPM upstream 연결 문제임을 확인
+    - [x] `https://lm.alluser.kr/v1/models`의 `502 Bad Gateway`가 앱 코드 문제가 아니라 NPM upstream 연결 문제임을 확인
     - [x] Mac mini에서 `127.0.0.1:1234/v1/models`는 성공하고 `192.168.0.207:1234`는 실패하는 상태를 확인
     - [x] LM Studio Local Server의 LAN 접근 허용 후 `192.168.0.207:1234` 연결 가능 상태로 전환
 - [x] **OpenAI 생성 경로 보정**
@@ -631,7 +631,7 @@ NEIS 자동 입력 크롬 확장 프로그램 개발이 완료되었습니다.
 - [x] **로컬 모델 목록 재정리**
     - [x] 사용자 선택 목록을 `Gemma 4 E4B`, `Gemma 4 E2B`, `Gemma 4 26B Q4` 3개로 정리
     - [x] 기존 원격 Ollama용 `gemma4:26b` 항목 제거
-    - [x] 세 모델 모두 `https://lm.alluser.site` LM Studio 엔드포인트를 사용하도록 `utils/streamFetch.js` 구성 변경
+    - [x] 세 모델 모두 `https://lm.alluser.kr` LM Studio 엔드포인트를 사용하도록 `utils/streamFetch.js` 구성 변경
 - [x] **기본 모델 변경**
     - [x] 기본 모델을 `Gemma 4 26B Q4`로 변경
     - [x] 드롭다운 표시 문구를 26B Q4 기준으로 정리
